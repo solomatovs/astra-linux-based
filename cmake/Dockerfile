@@ -1,5 +1,4 @@
-# cmake — собран из исходников: в репозитории astra только 3.16, а для LLVM 16+
-# нужен cmake >= 3.20.
+# cmake
 ARG BASE_IMAGE=dmp/gcc:11.5.0
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
