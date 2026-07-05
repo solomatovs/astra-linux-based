@@ -59,7 +59,6 @@ dist:
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg BUILD_IMAGE=$(BUILD_IMAGE) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
-		--build-arg PYTHON_VERSION_SHORT=$(PYTHON_VERSION_SHORT) \
 		--build-arg APT_DEPS="$(APT_DEPS)" \
 		--tag $(IMAGE)-dist \
 		--tag $(IMAGE_SHORT)-dist \
@@ -71,7 +70,6 @@ build:
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg BUILD_IMAGE=$(BUILD_IMAGE) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
-		--build-arg PYTHON_VERSION_SHORT=$(PYTHON_VERSION_SHORT) \
 		--build-arg APT_DEPS="$(APT_DEPS)" \
 		--tag $(IMAGE) \
 		--tag $(IMAGE_SHORT) \

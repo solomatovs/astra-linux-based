@@ -1,13 +1,14 @@
 # python
 ARG BASE_IMAGE=dmp/glibc:2.28
 ARG BUILD_IMAGE=dmp/gcc:8.5.0
+ARG PYTHON_PATH=/opt/python
 
 FROM ${BASE_IMAGE} AS base
 FROM ${BUILD_IMAGE} AS dist
 ARG PYTHON_VERSION
-ARG PYTHON_VERSION_SHORT
 ARG APT_DEPS
-ARG PYTHON_PATH=/opt/python${PYTHON_VERSION_SHORT}
+ARG PYTHON_PATH
+
 
 # build-toolchain (bootstrap-gcc из репо) + dev-зависимости для gcc/python
 RUN apt-get update \
@@ -33,9 +34,8 @@ RUN cd /tmp \
     && rm -rf /tmp/*
 
 FROM ${BASE_IMAGE} AS runtime
+ARG PYTHON_PATH
 
-ARG PYTHON_VERSION_SHORT
-
-COPY --from=dist /opt/python${PYTHON_VERSION_SHORT} /
+COPY --from=dist ${PYTHON_PATH} /
 
 ENTRYPOINT [ "/usr/local/bin/python3" ]
