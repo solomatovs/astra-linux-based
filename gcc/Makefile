@@ -5,18 +5,17 @@ BUILD_CONTEXT ?= .
 .DEFAULT_GOAL := help
 .PHONY: help sources dist build test all
 
-ASTRA_VERSION  ?= 2.12
-GLIBC_VERSION  ?= 2.28
-GCC_VERSION      ?= 8.5.0
-GMP_VERSION      ?= 6.1.2
-MPFR_VERSION     ?= 4.0.2
-MPC_VERSION      ?= 1.1.0
-BINUTILS_VERSION ?= 2.31.1
-MAKE_VERSION     ?= 4.4.1
+ASTRA_VERSION 		?= 2.12
+GLIBC_VERSION		?= 2.28
+GCC_VERSION      	?= 8.5.0
+GMP_VERSION      	?= 6.1.2
+MPFR_VERSION     	?= 4.0.2
+MPC_VERSION      	?= 1.1.0
+BINUTILS_VERSION 	?= 2.31.1
+MAKE_VERSION     	?= 4.4.1
 
-BASE_IMAGE=dmp/glibc:$(GLIBC_VERSION)
-
-IMAGE ?= dmp/gcc:$(GCC_VERSION)
+BASE_IMAGE		 	:= dmp/glibc:$(GLIBC_VERSION)
+IMAGE			 	:= dmp/gcc:$(GCC_VERSION)
 
 
 help:
