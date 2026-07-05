@@ -6,7 +6,7 @@ GLIBC_VERSION ?= 2.28
 
 OREL_IMAGE    ?= registry.astralinux.ru/library/orel:$(ASTRA_VERSION)
 OREL_TAR      ?= $(ARTIFACTS)/orel-$(ASTRA_VERSION).tar
-IMAGE         ?= astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION)
+IMAGE         ?= dmp/glibc:$(GLIBC_VERSION)
 
 APT_DEB_DIR   ?= $(ARTIFACTS)/apt-bootstrap
 DEB_PACKAGES  ?= apt-transport-https
@@ -15,10 +15,14 @@ DEB_PACKAGES  ?= apt-transport-https
 .PHONY: help sources image debs build
 
 help:
-	@echo "  make sources   скачать исходники glibc $(GLIBC_VERSION) (базовый образ astra — tar в $(ARTIFACTS)/)"
-	@echo "  make image  	 скачать образ astra-linux с офф. репозитория $(OREL_IMAGE) -> $(OREL_TAR)"
+	@echo "make:"
+	@echo "  make all       собрать всё"
+	@echo "  make sources   скачать всё для сборки"
+	@echo "  make image  	скачать образ astra-linux с офф. репозитория $(OREL_IMAGE) -> $(OREL_TAR)"
 	@echo "  make debs      скачать .deb ($(DEB_PACKAGES)) через orel -> $(APT_DEB_DIR)/"
-	@echo "  make build     собрать базовый образ glibc $(GLIBC_VERSION): $(IMAGE)"
+	@echo "  make build     собрать образ $(IMAGE)"
+	@echo ""
+
 
 sources:
 	@mkdir -p $(ARTIFACTS)/glibc-src
@@ -45,7 +49,9 @@ debs:
 	@ls -1 $(APT_DEB_DIR)/*.deb 2>/dev/null || echo "  ! ни одного .deb не скачано"
 
 build:
-	docker build -f Dockerfile --target glibc \
+	@docker build -f Dockerfile --target glibc \
+		--build-arg BASE_IMAGE=$(OREL_IMAGE) \
+		--build-arg GLIBC_VERSION=$(GLIBC_VERSION) \
 		--tag $(IMAGE) \
 		--progress plain $(BUILD_CONTEXT)
 	@docker images $(IMAGE)
@@ -56,3 +62,6 @@ image:
 	else echo ">>> docker pull $(OREL_IMAGE)"; docker pull $(OREL_IMAGE); \
 	  echo ">>> docker save -> $(OREL_TAR)"; docker save -o "$(OREL_TAR)" $(OREL_IMAGE); \
 	  echo "  ✓ $(OREL_TAR)"; fi
+
+all: sources debs build image
+

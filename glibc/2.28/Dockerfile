@@ -1,4 +1,6 @@
-FROM registry.astralinux.ru/library/orel:2.12 AS pre_build
+ARG BASE_IMAGE=registry.astralinux.ru/library/orel:2.12
+
+FROM ${BASE_IMAGE} AS pre_build
 
 ARG GLIBC_PATH=/opt/glibc
 
@@ -37,6 +39,7 @@ RUN if ls /tmp/debs/*.deb >/dev/null 2>&1; then \
 
 
 FROM pre_build AS glibc_compile
+ARG GLIBC_VERSION
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive           \
@@ -44,12 +47,12 @@ RUN apt-get update \
         build-essential gawk bison xz-utils gettext \
     && rm -rf /var/lib/apt/lists/*
 
-COPY artifacts/glibc-src/glibc-*.tar.xz /tmp/
+COPY artifacts/glibc-src/glibc-${GLIBC_VERSION}.tar.xz /tmp/
 RUN cd /tmp \
-    && tar -xf glibc-*.tar.xz   \
+    && tar -xf glibc-${GLIBC_VERSION}.tar.xz   \
     && mkdir build              \
     && cd build                 \
-    && ../glibc-*/configure     \
+    && ../glibc-${GLIBC_VERSION}/configure     \
         --prefix=/usr           \
         --libdir=/usr/lib/x86_64-linux-gnu      \
         --disable-sanity-checks --disable-werror\
