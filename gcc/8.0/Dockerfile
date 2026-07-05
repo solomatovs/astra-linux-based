@@ -2,14 +2,17 @@
 ARG ASTRA_VERSION=2.12
 ARG GLIBC_VERSION=2.28
 
-FROM astra-linux:${ASTRA_VERSION}-glibc${GLIBC_VERSION} AS base
-FROM base AS gcc-dist
+ARG BASE_IMAGE=astra-linux:2.12-glibc2.28
+
+FROM ${BASE_IMAGE} AS base
+FROM base AS dist
 
 ARG GCC_VERSION
 ARG GMP_VERSION
 ARG MPFR_VERSION
 ARG MPC_VERSION
 ARG BINUTILS_VERSION
+ARG MAKE_VERSION
 ARG GCC_PATH=/opt/gcc
 
 # build-toolchain (bootstrap-gcc из репо) + dev-зависимости для gcc/python
@@ -34,13 +37,13 @@ RUN set -eux \
     done
 
 # GCC (libstdc++)
-COPY artifacts/gcc-src/ /tmp/gcc-src/
+COPY artifacts/src/ /tmp/src/
 RUN cd /tmp \
-    && tar -xf gcc-src/gcc-${GCC_VERSION}.tar.xz \
+    && tar -xf src/gcc-${GCC_VERSION}.tar.xz \
     && cd gcc-${GCC_VERSION} \
-    && tar -xf /tmp/gcc-src/gmp-${GMP_VERSION}.tar.xz && mv gmp-${GMP_VERSION} gmp \
-    && tar -xf /tmp/gcc-src/mpfr-${MPFR_VERSION}.tar.xz && mv mpfr-${MPFR_VERSION} mpfr \
-    && tar -xf /tmp/gcc-src/mpc-${MPC_VERSION}.tar.gz && mv mpc-${MPC_VERSION} mpc \
+    && tar -xf /tmp/src/gmp-${GMP_VERSION}.tar.xz && mv gmp-${GMP_VERSION} gmp \
+    && tar -xf /tmp/src/mpfr-${MPFR_VERSION}.tar.xz && mv mpfr-${MPFR_VERSION} mpfr \
+    && tar -xf /tmp/src/mpc-${MPC_VERSION}.tar.gz && mv mpc-${MPC_VERSION} mpc \
     && cd /tmp && mkdir gcc-build && cd gcc-build && \
     ../gcc-${GCC_VERSION}/configure \
         --enable-languages=c,c++ \
@@ -56,12 +59,24 @@ RUN cd /tmp \
 
 # binutils
 RUN cd /tmp \
-    && tar -xf gcc-src/binutils-${BINUTILS_VERSION}.tar.xz \
+    && tar -xf src/binutils-${BINUTILS_VERSION}.tar.xz \
     && mkdir binutils-build && cd binutils-build \
     && ../binutils-${BINUTILS_VERSION}/configure \
         --disable-multilib \
         --disable-nls \
         --disable-werror \
+    && make -j"$(nproc)" \
+    && make install-strip DESTDIR=${GCC_PATH} \
+    && cd / \
+    && rm -rf /tmp/binutils-build /tmp/binutils-${BINUTILS_VERSION}
+
+# make
+RUN cd /tmp \
+    && tar -xf src/make-${MAKE_VERSION}.tar.gz \
+    && cd make-${MAKE_VERSION} \
+    && ./configure \
+        --disable-nls \
+        --without-guile \
     && make -j"$(nproc)" \
     && make install-strip DESTDIR=${GCC_PATH} \
     && rm -rf ${GCC_PATH}/usr/local/share \
@@ -74,9 +89,9 @@ FROM base AS runtime
 
 ARG GCC_PATH=/opt/gcc
 # устанавливаем GCC 8 в runtime-образ, чтобы можно было собирать C/C++-приложения
-COPY --from=gcc-dist ${GCC_PATH} /
+COPY --from=dist ${GCC_PATH} /
 # копирую заголовки и библиотеки из промежуточного образа, чтобы можно было собирать C/C++-приложения
-COPY --from=gcc-dist /usr/include/ /usr/include/
+COPY --from=dist /usr/include/ /usr/include/
 
 # добавляем binutils в PATH, чтобы можно было собирать C/C++-приложения
 RUN printf '%s\n' /usr/local/lib64 /usr/local/lib > /etc/ld.so.conf.d/gcc-local.conf \
