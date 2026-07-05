@@ -1,8 +1,5 @@
-# gcc поверх готовой базы astra-linux:${ASTRA_VERSION}-${GLIBC_VERSION}
-ARG ASTRA_VERSION=2.12
-ARG GLIBC_VERSION=2.28
-
-ARG BASE_IMAGE=astra-linux:2.12-glibc2.28
+# gcc
+ARG BASE_IMAGE=dmp/astra-linux:2.12-glibc2.28
 
 FROM ${BASE_IMAGE} AS base
 FROM base AS dist

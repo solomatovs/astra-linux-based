@@ -14,18 +14,24 @@ MPC_VERSION      ?= 1.1.0
 BINUTILS_VERSION ?= 2.31.1
 MAKE_VERSION     ?= 4.4.1
 
-IMAGE ?= dmp-gcc:$(GCC_VERSION)
+BASE_IMAGE=dmp/glibc:$(GLIBC_VERSION)
+
+IMAGE ?= dmp/gcc:$(GCC_VERSION)
 
 
 help:
 	@echo "make:"
-	@echo "  make all        скачать всё для сборки и собрать образ astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION)-gcc$(GCC_VERSION)"
-	@echo "  make sources    скачать всё для сборки: тарболы binutils/gcc/gmp/mpfr/mpc/make"
-	@echo "  make dist   	 собрать промежуточный образ astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION)-gcc$(GCC_VERSION)-dist"
-	@echo "  make build      собрать образ astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION)-gcc$(GCC_VERSION)"
+	@echo "  make all        собрать всё"
+	@echo "  make sources    скачать всё для сборки"
+	@echo "  make dist   	 собрать промежуточный образ-дистрибутив $(IMAGE)-dist"
+	@echo "  make build      собрать образ $(IMAGE)"
 	@echo "  make test       проверить тулчейн: собрать и запустить test/hello.cpp в образе $(IMAGE)"
 	@echo ""
 
+
+debug:
+	@echo BASE_IMAGE: $(BASE_IMAGE)
+	@echo IMAGE: $(IMAGE)
 
 sources:
 	@mkdir -p $(ARTIFACTS)/src
@@ -42,29 +48,32 @@ sources:
 	  else echo ">>> $$url"; curl -fSL -o "$$dest" "$$url"; fi; \
 	done
 
+
 dist:
 	docker build -f Dockerfile --target dist \
-		--build-arg BASE_IMAGE=astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION) \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg GCC_VERSION=$(GCC_VERSION) \
 		--build-arg GMP_VERSION=$(GMP_VERSION) \
 		--build-arg MPFR_VERSION=$(MPFR_VERSION) \
 		--build-arg MPC_VERSION=$(MPC_VERSION) \
 		--build-arg BINUTILS_VERSION=$(BINUTILS_VERSION) \
 		--build-arg MAKE_VERSION=$(MAKE_VERSION) \
-		--tag dmp-gcc:$(GCC_VERSION)-dist \
+		--tag $(IMAGE)-dist \
 		--progress plain $(BUILD_CONTEXT)
+
 
 build:
 	docker build -f Dockerfile \
-		--build-arg BASE_IMAGE=astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION) \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg GCC_VERSION=$(GCC_VERSION) \
 		--build-arg GMP_VERSION=$(GMP_VERSION) \
 		--build-arg MPFR_VERSION=$(MPFR_VERSION) \
 		--build-arg MPC_VERSION=$(MPC_VERSION) \
 		--build-arg BINUTILS_VERSION=$(BINUTILS_VERSION) \
 		--build-arg MAKE_VERSION=$(MAKE_VERSION) \
-		--tag dmp-gcc:$(GCC_VERSION) \
+		--tag $(IMAGE) \
 		--progress plain $(BUILD_CONTEXT)
+
 
 test:
 	docker run --rm -v $(CURDIR)/test:/test:ro $(IMAGE) bash -euc '\
@@ -79,5 +88,6 @@ test:
 		g++ -O2 -Wall /test/hello.cpp -o /tmp/hello; \
 		echo "== run =="; \
 		/tmp/hello'
+
 
 all: sources dist build test
