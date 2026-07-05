@@ -51,7 +51,7 @@ dist:
 		--build-arg MPC_VERSION=$(MPC_VERSION) \
 		--build-arg BINUTILS_VERSION=$(BINUTILS_VERSION) \
 		--build-arg MAKE_VERSION=$(MAKE_VERSION) \
-		--tag astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION)-gcc$(GCC_VERSION)-dist \
+		--tag dmp-gcc:$(GCC_VERSION)-dist \
 		--progress plain $(BUILD_CONTEXT)
 
 build:
@@ -63,7 +63,7 @@ build:
 		--build-arg MPC_VERSION=$(MPC_VERSION) \
 		--build-arg BINUTILS_VERSION=$(BINUTILS_VERSION) \
 		--build-arg MAKE_VERSION=$(MAKE_VERSION) \
-		--tag astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION)-gcc$(GCC_VERSION) \
+		--tag dmp-gcc:$(GCC_VERSION) \
 		--progress plain $(BUILD_CONTEXT)
 
 test:

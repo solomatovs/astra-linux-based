@@ -45,7 +45,9 @@ debs:
 	@ls -1 $(APT_DEB_DIR)/*.deb 2>/dev/null || echo "  ! ни одного .deb не скачано"
 
 build:
-	docker build -f Dockerfile --target glibc -t $(IMAGE) $(BUILD_CONTEXT) --progress plain
+	docker build -f Dockerfile --target glibc \
+		--tag $(IMAGE) \
+		--progress plain $(BUILD_CONTEXT)
 	@docker images $(IMAGE)
 
 image:
