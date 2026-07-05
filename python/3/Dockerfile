@@ -1,11 +1,16 @@
-# gcc поверх готовой базы astra-linux:${ASTRA_VERSION}-${GLIBC_VERSION}
-ARG BASE_IMAGE=astra-linux:2.12-glibc2.28
-ARG BUILD_IMAGE=astra-linux:2.12-glibc2.28-gcc8.5.0
+# python
+ARG BASE_IMAGE=dmp/glibc:2.28
+ARG BUILD_IMAGE=dmp/gcc:8.5.0
 
 FROM ${BUILD_IMAGE} AS dist
 ARG PYTHON_VERSION
 ARG PYTHON_VERSION_SHORT
 ARG PYTHON_PATH=/opt/python${PYTHON_VERSION_SHORT}
+
+# build-toolchain (bootstrap-gcc из репо) + dev-зависимости для gcc/python
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ${APT_DEPS} \
+    && rm -rf /var/lib/apt/lists/*
 
 # pip.conf
 COPY artifacts/pip.conf* /tmp/pipconf/
@@ -23,14 +28,14 @@ RUN cd /tmp \
         LDFLAGS=-Wl,-rpath,/usr/local/lib \
     && make -j"$(nproc)" \
     && make install DESTDIR=${PYTHON_PATH} \
-    && ls -al ${PYTHON_PATH}/usr/local/bin/python* \
+    && rm -rf /tmp/*
+
+RUN ls -al ${PYTHON_PATH}/usr/local/bin/python* \
     && ls -al ${PYTHON_PATH}/usr/local/lib/python* \
     && ls -al ${PYTHON_PATH}/usr/local/lib/libpython* \
     && ls -al ${PYTHON_PATH}/usr/local/lib/pkgconfig/python* \
     && ls -al ${PYTHON_PATH}/usr/local/include/python* \
-    && ls -al ${PYTHON_PATH}/usr/local \
-    && rm -rf /tmp/*
-
+    && ls -al ${PYTHON_PATH}/usr/local
 
 FROM ${BASE_IMAGE} AS runtime
 
