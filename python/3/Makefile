@@ -1,11 +1,12 @@
-BASE_DIR      ?= .
-ARTIFACTS     ?= $(BASE_DIR)/artifacts
-BUILD_CONTEXT ?= .
+BASE_DIR      	?= .
+ARTIFACTS     	?= $(BASE_DIR)/artifacts
+BUILD_CONTEXT 	?= $(BASE_DIR)
+TEST_DIR		?= $(BASE_DIR)/test
+
 
 .DEFAULT_GOAL := help
-.PHONY: help sources dist build all
+.PHONY: help sources dist build test all
 
-ASTRA_VERSION  			?= 2.12
 GLIBC_VERSION  			?= 2.28
 GCC_VERSION      		?= 8.5.0
 PYTHON_VERSION   		?= 3.11.15
@@ -31,6 +32,7 @@ help:
 	@echo "  make sources    	скачать всё для сборки"
 	@echo "  make dist   		собрать промежуточный образ-дистрибутив $(IMAGE)-dist"
 	@echo "  make build      	собрать образ $(IMAGE)"
+	@echo "  make test       	проверить образ $(IMAGE): python, pip, C-модули, компрессия, сеть, ssl, sqlite, ffi"
 	@echo ""
 
 
@@ -76,10 +78,15 @@ build:
 		--progress plain $(BUILD_CONTEXT)
 
 
-run:
-	docker run -f Dockerfile $(NO_CACHE_TEXT) \
-		--tag $(IMAGE) \
-		--tag $(IMAGE_SHORT) \
-		--progress plain $(BUILD_CONTEXT)
+test:
+	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE) -euc '\
+		echo "== interpreter & pip =="; \
+		python3 --version; \
+		python3 -c "import sys; print(sys.executable)"; \
+		python3 -m pip --version; \
+		python3 -m pip list 2>/dev/null | head -n 20; \
+		echo "== functional checks =="; \
+		python3 /test/pycheck.py'
 
-all: sources dist build
+
+all: sources dist build test

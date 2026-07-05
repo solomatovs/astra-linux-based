@@ -1,6 +1,8 @@
 BASE_DIR      	?= .
 ARTIFACTS    	?= $(BASE_DIR)/artifacts
-BUILD_CONTEXT	?= .
+BUILD_CONTEXT 	?= $(BASE_DIR)
+TEST_DIR		?= $(BASE_DIR)/test
+
 
 ASTRA_VERSION	?= 2.12
 GLIBC_VERSION	?= 2.28
@@ -67,7 +69,7 @@ image:
 	  echo "  ✓ $(OREL_TAR)"; fi
 
 test:
-	@docker run --rm -v $(CURDIR)/test:/test:ro $(IMAGE) bash -euc '\
+	@docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE) -euc '\
 		echo "== 1. runtime glibc =="; \
 		ldd --version | head -1; \
 		getconf GNU_LIBC_VERSION; \

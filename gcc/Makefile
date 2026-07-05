@@ -1,6 +1,8 @@
-BASE_DIR      ?= .
-ARTIFACTS     ?= $(BASE_DIR)/artifacts
-BUILD_CONTEXT ?= .
+BASE_DIR      	?= .
+ARTIFACTS     	?= $(BASE_DIR)/artifacts
+BUILD_CONTEXT 	?= $(BASE_DIR)
+TEST_DIR		?= $(BASE_DIR)/test
+
 
 .DEFAULT_GOAL := help
 .PHONY: help sources dist build test all
@@ -78,8 +80,7 @@ build:
 
 
 test:
-	docker run --rm -v $(CURDIR)/test:/test:ro $(IMAGE) bash -euc '\
-		export PATH=/usr/local/bin:$$PATH; \
+	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE) -euc '\
 		echo "== versions =="; \
 		gcc  --version | head -1; \
 		g++  --version | head -1; \

@@ -82,3 +82,5 @@ COPY --from=dist /usr/include/ /usr/include/
 # добавляем binutils в PATH, чтобы можно было собирать C/C++-приложения
 RUN printf '%s\n' /usr/local/lib64 /usr/local/lib > /etc/ld.so.conf.d/gcc-local.conf \
     && ldconfig
+
+ENTRYPOINT [ "/usr/local/bin/gcc" ]
