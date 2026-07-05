@@ -14,7 +14,7 @@ MPC_VERSION      ?= 1.1.0
 BINUTILS_VERSION ?= 2.31.1
 MAKE_VERSION     ?= 4.4.1
 
-IMAGE ?= astra-linux:$(ASTRA_VERSION)-glibc$(GLIBC_VERSION)-gcc$(GCC_VERSION)
+IMAGE ?= dmp-gcc:$(GCC_VERSION)
 
 
 help:
