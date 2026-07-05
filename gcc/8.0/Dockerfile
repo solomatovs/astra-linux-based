@@ -3,12 +3,13 @@ ARG ASTRA_VERSION=2.12
 ARG GLIBC_VERSION=2.28
 
 FROM astra-linux:${ASTRA_VERSION}-glibc${GLIBC_VERSION} AS base
-FROM base AS gcc_dist
+FROM base AS gcc-dist
 
 ARG GCC_VERSION
 ARG GMP_VERSION
 ARG MPFR_VERSION
 ARG MPC_VERSION
+ARG BINUTILS_VERSION
 ARG GCC_PATH=/opt/gcc
 
 # build-toolchain (bootstrap-gcc из репо) + dev-зависимости для gcc/python
@@ -18,7 +19,8 @@ RUN apt-get update \
         zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev \
         libssl-dev libreadline-dev libffi-dev libsqlite3-dev \
         libbz2-dev liblzma-dev curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # libc6-dev (от build-essential) перезаписал заголовки glibc на 2.24 —
 # возвращаем ${GLIBC_VERSION} из базы и перелинковываем arch-заголовки multiarch на них,
@@ -31,7 +33,7 @@ RUN set -eux \
         rm -rf "$n"; ln -s "../$n" "$n"; \
     done
 
-# GCC 8 (libstdc++)
+# GCC (libstdc++)
 COPY artifacts/gcc-src/ /tmp/gcc-src/
 RUN cd /tmp \
     && tar -xf gcc-src/gcc-${GCC_VERSION}.tar.xz \
@@ -49,7 +51,20 @@ RUN cd /tmp \
         --with-default-libstdcxx-abi=new \
     && make -j"$(nproc)" \
     && make install-strip DESTDIR=${GCC_PATH} \
-    && rm -rf ${GCC_PATH}/opt/gcc/share \
+    && cd / \
+    && rm -rf /tmp/gcc-build /tmp/gcc-${GCC_VERSION}
+
+# binutils
+RUN cd /tmp \
+    && tar -xf gcc-src/binutils-${BINUTILS_VERSION}.tar.xz \
+    && mkdir binutils-build && cd binutils-build \
+    && ../binutils-${BINUTILS_VERSION}/configure \
+        --disable-multilib \
+        --disable-nls \
+        --disable-werror \
+    && make -j"$(nproc)" \
+    && make install-strip DESTDIR=${GCC_PATH} \
+    && rm -rf ${GCC_PATH}/usr/local/share \
     && du -h --max-depth=1 ${GCC_PATH} \
     && cd / \
     && rm -rf /tmp/*
@@ -59,4 +74,10 @@ FROM base AS runtime
 
 ARG GCC_PATH=/opt/gcc
 # устанавливаем GCC 8 в runtime-образ, чтобы можно было собирать C/C++-приложения
-COPY --from=gcc_dist ${GCC_PATH} /
+COPY --from=gcc-dist ${GCC_PATH} /
+# копирую заголовки и библиотеки из промежуточного образа, чтобы можно было собирать C/C++-приложения
+COPY --from=gcc-dist /usr/include/ /usr/include/
+
+# добавляем binutils в PATH, чтобы можно было собирать C/C++-приложения
+RUN printf '%s\n' /usr/local/lib64 /usr/local/lib > /etc/ld.so.conf.d/gcc-local.conf \
+    && ldconfig
