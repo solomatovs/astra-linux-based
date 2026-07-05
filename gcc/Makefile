@@ -1,5 +1,5 @@
-SRC_DIR       ?= .
-ARTIFACTS     ?= artifacts
+BASE_DIR      ?= .
+ARTIFACTS     ?= $(BASE_DIR)/artifacts
 BUILD_CONTEXT ?= .
 
 .DEFAULT_GOAL := help
@@ -13,9 +13,11 @@ MPFR_VERSION     	?= 4.0.2
 MPC_VERSION      	?= 1.1.0
 BINUTILS_VERSION 	?= 2.31.1
 MAKE_VERSION     	?= 4.4.1
+NO_CACHE			?= 0
 
 BASE_IMAGE		 	:= dmp/glibc:$(GLIBC_VERSION)
 IMAGE			 	:= dmp/gcc:$(GCC_VERSION)
+NO_CACHE_TEXT		:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
 
 help:
@@ -31,6 +33,7 @@ help:
 debug:
 	@echo BASE_IMAGE: $(BASE_IMAGE)
 	@echo IMAGE: $(IMAGE)
+	@echo NO_CACHE_TEXT: $(NO_CACHE_TEXT)
 
 sources:
 	@mkdir -p $(ARTIFACTS)/src
@@ -49,7 +52,7 @@ sources:
 
 
 dist:
-	docker build -f Dockerfile --target dist \
+	docker build -f Dockerfile --target dist $(NO_CACHE_TEXT) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg GCC_VERSION=$(GCC_VERSION) \
 		--build-arg GMP_VERSION=$(GMP_VERSION) \
@@ -62,7 +65,7 @@ dist:
 
 
 build:
-	docker build -f Dockerfile \
+	docker build -f Dockerfile $(NO_CACHE_TEXT) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg GCC_VERSION=$(GCC_VERSION) \
 		--build-arg GMP_VERSION=$(GMP_VERSION) \

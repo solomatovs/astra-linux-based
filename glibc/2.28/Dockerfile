@@ -78,9 +78,36 @@ RUN set -eux \
     && ldconfig \
     && ldd --version | head -n1
 
+# это лайфхак!
+# В astra-linux glibc 2.24, это значит что даже после установки glibc 2.28 из исходников
+# если попробовать установить какой-либо пакет из репозитория, то dpkg (или apt)
+# перезапишут заголовочные файлы (include файлы) glibc 2.28 на заголовочные файлы glibc 2.24 из репозитория
+# решение проблемы такое:
+# регистрируем пустой пакет libc6-dev в репозитории dpkg с указанием версии glibc 2.28
+# тогда последующие apt install будут видеть, что уже установлена более новая версия glibc
+# и не будут перезатирать заголовочные файлы
+RUN set -eux \
+    && mkdir -p /tmp/fake-libc6-dev/DEBIAN \
+    && printf '%s\n' \
+        'Package: libc6-dev' \
+        'Version: 2.28' \
+        'Architecture: amd64' \
+        'Maintainer: local' \
+        'Provides: libc-dev' \
+        'Multi-Arch: same' \
+        'Description: dummy libc6-dev protecting source-built glibc 2.28 headers' \
+        > /tmp/fake-libc6-dev/DEBIAN/control \
+    && dpkg-deb --build /tmp/fake-libc6-dev /tmp/libc6-dev.deb \
+    && dpkg -i /tmp/libc6-dev.deb \
+    && apt-mark hold libc6-dev \
+    && rm -rf /tmp/fake-libc6-dev /tmp/libc6-dev.deb
+
+# linux-libc-dev (kernel-заголовки: linux/*, asm/*)
+# раньше приходил транзитивно через настоящий libc6-dev
+# fake-пакет выше его перекрывает, поэтому снужно поставить его явно
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive \
-    apt-get install -y --no-install-recommends locales \
+    apt-get install -y --no-install-recommends locales linux-libc-dev \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /usr/lib/x86_64-linux-gnu/locale \
     && localedef -i ru_RU -c -f UTF-8 ru_RU.UTF-8 \

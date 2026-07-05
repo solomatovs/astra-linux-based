@@ -22,17 +22,6 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# libc6-dev (от build-essential) перезаписал заголовки glibc на 2.24 —
-# возвращаем ${GLIBC_VERSION} из базы и перелинковываем arch-заголовки multiarch на них,
-# иначе сборка против 2.24-заголовков + ${GLIBC_VERSION}-libc даёт implicit-declaration
-COPY --from=base /usr/include/ /usr/include/
-RUN set -eux \
-    && cd /usr/include/x86_64-linux-gnu \
-    && dpkg -L libc6-dev | grep -E '^/usr/include/x86_64-linux-gnu/[^/]+$' | while read -r p; do \
-        n=${p#/usr/include/x86_64-linux-gnu/}; \
-        rm -rf "$n"; ln -s "../$n" "$n"; \
-    done
-
 # GCC (libstdc++)
 COPY artifacts/src/ /tmp/src/
 RUN cd /tmp \

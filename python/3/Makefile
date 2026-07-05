@@ -1,5 +1,5 @@
-SRC_DIR       ?= .
-ARTIFACTS     ?= artifacts
+BASE_DIR      ?= .
+ARTIFACTS     ?= $(BASE_DIR)/artifacts
 BUILD_CONTEXT ?= .
 
 .DEFAULT_GOAL := help
@@ -11,11 +11,13 @@ GCC_VERSION      		?= 8.5.0
 PYTHON_VERSION   		?= 3.11.15
 BASE_IMAGE				?= dmp/glibc:$(GLIBC_VERSION)
 BUILD_IMAGE				?= dmp/gcc:$(GCC_VERSION)
+NO_CACHE				?= 0
 
 VERSION_WORDS			:= $(subst ., ,$(PYTHON_VERSION))
 PYTHON_VERSION_SHORT	:= $(word 1,$(VERSION_WORDS)).$(word 2,$(VERSION_WORDS))
 IMAGE					:= dmp/python:$(PYTHON_VERSION)
 IMAGE_SHORT				:= dmp/python:$(PYTHON_VERSION_SHORT)
+NO_CACHE_TEXT			:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
 APT_DEPS         		:= \
 		zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev \
@@ -35,6 +37,8 @@ help:
 debug:
 	@echo PYTHON_VERSION: $(PYTHON_VERSION)
 	@echo PYTHON_VERSION_SHORT: $(PYTHON_VERSION_SHORT)
+	@echo NO_CACHE_TEXT: $(NO_CACHE_TEXT)
+	@echo APT_DEPS: $(APT_DEPS)
 
 
 sources:
@@ -49,7 +53,7 @@ sources:
 
 
 dist:
-	docker build -f Dockerfile --target dist --no-cache \
+	docker build -f Dockerfile --target dist $(NO_CACHE_TEXT) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg BUILD_IMAGE=$(BUILD_IMAGE) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
@@ -61,7 +65,7 @@ dist:
 
 
 build:
-	docker build -f Dockerfile \
+	docker build -f Dockerfile $(NO_CACHE_TEXT) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg BUILD_IMAGE=$(BUILD_IMAGE) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
@@ -71,5 +75,11 @@ build:
 		--tag $(IMAGE_SHORT) \
 		--progress plain $(BUILD_CONTEXT)
 
+
+run:
+	docker run -f Dockerfile $(NO_CACHE_TEXT) \
+		--tag $(IMAGE) \
+		--tag $(IMAGE_SHORT) \
+		--progress plain $(BUILD_CONTEXT)
 
 all: sources dist build

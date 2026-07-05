@@ -2,9 +2,11 @@
 ARG BASE_IMAGE=dmp/glibc:2.28
 ARG BUILD_IMAGE=dmp/gcc:8.5.0
 
+FROM ${BASE_IMAGE} AS base
 FROM ${BUILD_IMAGE} AS dist
 ARG PYTHON_VERSION
 ARG PYTHON_VERSION_SHORT
+ARG APT_DEPS
 ARG PYTHON_PATH=/opt/python${PYTHON_VERSION_SHORT}
 
 # build-toolchain (bootstrap-gcc из репо) + dev-зависимости для gcc/python
@@ -30,13 +32,10 @@ RUN cd /tmp \
     && make install DESTDIR=${PYTHON_PATH} \
     && rm -rf /tmp/*
 
-RUN ls -al ${PYTHON_PATH}/usr/local/bin/python* \
-    && ls -al ${PYTHON_PATH}/usr/local/lib/python* \
-    && ls -al ${PYTHON_PATH}/usr/local/lib/libpython* \
-    && ls -al ${PYTHON_PATH}/usr/local/lib/pkgconfig/python* \
-    && ls -al ${PYTHON_PATH}/usr/local/include/python* \
-    && ls -al ${PYTHON_PATH}/usr/local
-
 FROM ${BASE_IMAGE} AS runtime
 
-COPY --from=dist ${PYTHON_PATH} /
+ARG PYTHON_VERSION_SHORT
+
+COPY --from=dist /opt/python${PYTHON_VERSION_SHORT} /
+
+ENTRYPOINT [ "/usr/local/bin/python3" ]
