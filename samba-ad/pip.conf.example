@@ -1,0 +1,14 @@
+# ============================================================
+# Custom pip config for boba-base / boba runtime build.
+#
+# По умолчанию файл пустой (только комментарии) — pip ходит
+# в pypi.org. Подхватывается и pip'ом, и Poetry (через env).
+#
+# Для закрытого контура пример:
+#   [global]
+#   index-url = https://user:pass@pypi.internal.example.com/simple
+#   extra-index-url = https://pypi.internal2.example.com/simple
+#   trusted-host =
+#       pypi.internal.example.com
+#       pypi.internal2.example.com
+# ============================================================
