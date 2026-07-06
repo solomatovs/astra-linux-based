@@ -33,9 +33,21 @@ RUN cd /tmp \
     && make install DESTDIR=${PYTHON_PATH} \
     && rm -rf /tmp/*
 
+# Делаю так, что бы поиск пакетов происходил как в /usr/local/lib/pythonX.Y/site-packages
+# так и в /usr/lib/pythonX.Y/site-packages
+RUN set -eux; \
+    SP="$(find ${PYTHON_PATH}/usr/local/lib -maxdepth 2 -type d -name site-packages | head -1)"; \
+    PYDIR="$(basename "$(dirname "$SP")")"; \
+    printf "import site; site.addsitedir('/usr/lib/%s/site-packages')\n" "$PYDIR" > "$SP/000-usr-fhs.pth"; \
+    cat "$SP/000-usr-fhs.pth"
+
 FROM ${BASE_IMAGE} AS runtime
 ARG PYTHON_PATH
+ARG PYTHON_VERSION_SHORT
 
 COPY --from=dist ${PYTHON_PATH} /
+
+RUN ln -sf /usr/local/bin/python${PYTHON_VERSION_SHORT} /usr/local/bin/python3 \
+    && ldconfig
 
 ENTRYPOINT [ "/usr/local/bin/python3" ]
