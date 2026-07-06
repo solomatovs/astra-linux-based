@@ -1,0 +1,18 @@
+# ============================================================
+# Cargo config для закрытого контура (nexus). Реальный файл —
+# artifacts/cargo-config.toml, копируется в $CARGO_HOME/config.toml
+# (/usr/local/cargo/config.toml). По умолчанию отсутствует — cargo
+# ходит в crates.io.
+#
+# Пример замены источника на nexus:
+#   [source.crates-io]
+#   replace-with = "nexus"
+#
+#   [source.nexus]
+#   registry = "sparse+https://nexus.internal.example.com/repository/cargo/"
+#
+#   [registries.nexus]
+#   index = "sparse+https://nexus.internal.example.com/repository/cargo/"
+#
+# Проверить в образе: cargo -v ... / CARGO_HOME=/usr/local/cargo
+# ============================================================
