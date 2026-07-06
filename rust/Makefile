@@ -17,7 +17,7 @@ NO_CACHE				?= 0
 
 RUST_SRC_BASE			?= https://static.rust-lang.org/dist
 MRUSTC_SRC_BASE			?= https://github.com/thepowersgang/mrustc/archive/refs/tags
-APT_DEPS				?= patch curl zlib1g-dev libssl-dev pkg-config
+APT_DEPS				?= patch curl git zlib1g-dev libssl-dev pkg-config
 
 BUILD_IMAGE				:= dmp/gcc:$(GCC_VERSION)
 RUNTIME_IMAGE			:= dmp/gcc:$(GCC_VERSION)

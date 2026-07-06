@@ -38,28 +38,34 @@ RUN set -eux; \
     RUSTC_INSTALL_BINDIR=bin make -f minicargo.mk -j"$(nproc)" output-${RUST_VERSION}/rustc; \
     make -f minicargo.mk -j"$(nproc)" output-${RUST_VERSION}/cargo; \
     ./output-${RUST_VERSION}/rustc --version; \
-    ./output-${RUST_VERSION}/cargo --version
+    ./output-${RUST_VERSION}/cargo --version; \
+    make -C run_rustc -j"$(nproc)" RUSTC_VERSION=${RUST_VERSION}; \
+    run_rustc/output-${RUST_VERSION}/prefix/bin/rustc --version
 
-# save all output
+# install toolchain (rustc+cargo+std sysroot)
 RUN set -eux; \
-    mkdir -p ${RUST_PATH}/opt; \
-    cp -a /build/mrustc-${MRUSTC_VERSION}/output-${RUST_VERSION} ${RUST_PATH}/opt/rust-output; \
-    du -sh ${RUST_PATH}/opt/rust-output; \
-    ls -la ${RUST_PATH}/opt/rust-output | head -40
+    PFX=/build/mrustc-${MRUSTC_VERSION}/run_rustc/output-${RUST_VERSION}/prefix; \
+    mkdir -p ${RUST_PATH}/usr/local; \
+    cp -a "$PFX/." ${RUST_PATH}/usr/local/; \
+    du -sh ${RUST_PATH}/usr/local; \
+    ls -la ${RUST_PATH}/usr/local/bin
 
 
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG RUST_PATH=/opt/rust
 
-COPY --from=dist ${RUST_PATH}/opt/rust-output /opt/rust-output
+COPY --from=dist ${RUST_PATH}/usr/local /usr/local
 
-# ВРЕМЕННО: раскладка sysroot будет уточнена после инспекции dist-образа.
-RUN ln -sf /opt/rust-output/rustc /usr/local/bin/rustc \
-    && ln -sf /opt/rust-output/cargo /usr/local/bin/cargo \
-    && ldconfig || true
+# rustc/cargo (rust-бинари) линкуют libstd.so
+# кладём rust-lib-каталоги в ldconfig
+RUN printf '%s\n' \
+        /usr/local/lib \
+        /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/lib \
+        > /etc/ld.so.conf.d/rust-local.conf \
+    && ldconfig
 
-# CA
+# corp ca
 COPY artifacts/ca-chain.crt* /tmp/cacrt/
 RUN if [ -f /tmp/cacrt/ca-chain.crt ] && grep -qE '^-----BEGIN CERTIFICATE-----' /tmp/cacrt/ca-chain.crt; then \
         cp /tmp/cacrt/ca-chain.crt /usr/local/share/ca-certificates/ca-chain.crt \
@@ -67,7 +73,7 @@ RUN if [ -f /tmp/cacrt/ca-chain.crt ] && grep -qE '^-----BEGIN CERTIFICATE-----'
     fi \
     && rm -rf /tmp/cacrt
 
-# nexus mirror
+# corp nexus
 COPY artifacts/cargo-config.toml* /tmp/cargoconf/
 RUN if [ -f /tmp/cargoconf/cargo-config.toml ]; then \
         mkdir -p /usr/local/cargo && cp /tmp/cargoconf/cargo-config.toml /usr/local/cargo/config.toml; \
@@ -75,6 +81,6 @@ RUN if [ -f /tmp/cargoconf/cargo-config.toml ]; then \
     && rm -rf /tmp/cargoconf
 
 ENV CARGO_HOME=/usr/local/cargo \
-    PATH=/opt/rust-output:/usr/local/bin:${PATH}
+    PATH=/usr/local/bin:${PATH}
 
 ENTRYPOINT [ "/usr/local/bin/rustc" ]
