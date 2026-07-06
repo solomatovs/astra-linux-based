@@ -1,0 +1,9 @@
+{
+  "name": "nodecheck-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Минимальный npm-проект без внешних зависимостей (offline-friendly)",
+  "scripts": {
+    "start": "node index.js"
+  }
+}
