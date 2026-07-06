@@ -1,5 +1,11 @@
-ARG BASE_IMAGE=registry.astralinux.ru/library/orel:2.12
+ARG BASE_IMAGE=dmp/glibc:2.28
+ARG PYTHON_IMAGE=dmp/python:3.11-dist
+# gcc-тулчейн (gcc/g++/as/ld/make), собранный из исходников. Нужен, т.к. аптовый
+# binutils Astra (2.28) не ассемблирует AVX-512 EVEX-код glibc 2.37+.
+ARG GCC_IMAGE=dmp/gcc:14.2.0
 
+FROM ${PYTHON_IMAGE} AS python
+FROM ${GCC_IMAGE} AS gcc_tc
 FROM ${BASE_IMAGE} AS pre_build
 
 ARG GLIBC_PATH=/opt/glibc
@@ -40,19 +46,35 @@ RUN if ls /tmp/debs/*.deb >/dev/null 2>&1; then \
 
 FROM pre_build AS glibc_compile
 ARG GLIBC_VERSION
+ARG GLIBC_PATH
 
+# не-компиляторные утилиты для сборки glibc (компилятор/ассемблер — из gcc-тулчейна ниже)
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive           \
     apt-get install -y --no-install-recommends  \
-        build-essential gawk bison xz-utils gettext \
+        gawk bison xz-utils gettext \
     && rm -rf /var/lib/apt/lists/*
+
+# gcc-тулчейн из собранного образа (gcc/g++/as/ld/make + современный binutils)
+# заменяет древний apt build-essential, чей ассемблер не знает AVX-512 EVEX glibc 2.37+
+COPY --from=gcc_tc /usr/local /usr/local
+RUN printf '%s\n' /usr/local/lib64 /usr/local/lib > /etc/ld.so.conf.d/gcc-local.conf \
+    && ldconfig \
+    && gcc --version | head -1 \
+    && as --version | head -1
+
+# python (glibc >= 2.29 требует python для сборки)
+COPY --from=python /opt/python /
+RUN ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3 \
+    && ldconfig
 
 COPY artifacts/glibc-src/glibc-${GLIBC_VERSION}.tar.xz /tmp/
 RUN cd /tmp \
     && tar -xf glibc-${GLIBC_VERSION}.tar.xz   \
-    && mkdir build              \
+    && mkdir build                              \
     && cd build                 \
-    && ../glibc-${GLIBC_VERSION}/configure     \
+    && CC=/usr/local/bin/gcc CXX=/usr/local/bin/g++ \
+       ../glibc-${GLIBC_VERSION}/configure     \
         --prefix=/usr           \
         --libdir=/usr/lib/x86_64-linux-gnu      \
         --disable-sanity-checks --disable-werror\
@@ -71,6 +93,7 @@ RUN cd /tmp \
 FROM pre_build AS glibc
 
 ARG GLIBC_PATH=/opt/glibc
+ARG GLIBC_VERSION
 COPY --from=glibc_compile ${GLIBC_PATH} /
 
 RUN set -eux \
@@ -90,12 +113,12 @@ RUN set -eux \
     && mkdir -p /tmp/fake-libc6-dev/DEBIAN \
     && printf '%s\n' \
         'Package: libc6-dev' \
-        'Version: 2.28' \
+        "Version: ${GLIBC_VERSION}" \
         'Architecture: amd64' \
         'Maintainer: local' \
         'Provides: libc-dev' \
         'Multi-Arch: same' \
-        'Description: dummy libc6-dev protecting source-built glibc 2.28 headers' \
+        "Description: dummy libc6-dev protecting source-built glibc ${GLIBC_VERSION} headers" \
         > /tmp/fake-libc6-dev/DEBIAN/control \
     && dpkg-deb --build /tmp/fake-libc6-dev /tmp/libc6-dev.deb \
     && dpkg -i /tmp/libc6-dev.deb \

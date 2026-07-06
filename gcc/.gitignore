@@ -1,1 +1,4 @@
 artifacts
+# реальные конфиги закрытого контура (шаблоны — *.example — остаются в git)
+apt-sources.list
+ca-chain.crt
