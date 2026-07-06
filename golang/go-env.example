@@ -1,0 +1,13 @@
+# ============================================================
+# Go env для закрытого контура (nexus). Реальный файл — artifacts/go-env,
+# копируется в /etc/go/env (переменная GOENV). По умолчанию отсутствует —
+# go идёт в публичный proxy.golang.org.
+#
+# Для nexus раскомментируйте/замените:
+#   GOPROXY=https://nexus.internal.example.com/repository/go-proxy/
+#   GOSUMDB=off
+#   GOFLAGS=-mod=mod
+#   GOPRIVATE=*.internal.example.com
+#
+# Проверить в образе: go env GOPROXY
+# ============================================================
