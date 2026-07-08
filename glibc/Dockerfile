@@ -96,7 +96,7 @@ RUN if [ -x /usr/local/bin/gcc ]; then                              \
     && ldconfig
 
 # glibc
-COPY artifacts/glibc-src/glibc-${GLIBC_VERSION}.tar.xz /tmp/
+COPY artifacts/src/glibc-${GLIBC_VERSION}.tar.xz /tmp/
 RUN cd /tmp                                     \
     && tar -xf glibc-${GLIBC_VERSION}.tar.xz    \
     && mkdir build && cd build                  \

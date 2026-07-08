@@ -114,8 +114,8 @@ sources-%:
 	# вызываем рекурсивно предыдущую версию
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
-	mkdir -p $(ARTIFACTS)/glibc-src
-	curl -v --skip-existing -O --output-dir "$(ARTIFACTS)/glibc-src" "$(BASE_URL)/glibc/glibc-$$current.tar.xz"
+	mkdir -p $(ARTIFACTS)/src
+	curl -v --skip-existing -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/glibc/glibc-$$current.tar.xz"
 
 
 # Скачиваем .deb для bootstrap закрытого контура
@@ -217,7 +217,7 @@ clean-%:
 	# вызываем рекурсивно предыдущую версию
 	[ -n "$$prev" ] && $(MAKE) clean-$$prev || true
 	set -e
-	rm -f "$(ARTIFACTS)/glibc-src/glibc-$$current.tar.xz"
+	rm -f "$(ARTIFACTS)/src/glibc-$$current.tar.xz"
 
 
 .PHONY: all
