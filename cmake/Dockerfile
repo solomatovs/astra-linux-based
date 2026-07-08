@@ -1,9 +1,9 @@
 # cmake
-ARG BASE_IMAGE=dmp/gcc:8.5.0
+ARG BUILD_IMAGE=dmp/gcc:8.5.0
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
-FROM ${BASE_IMAGE} AS base
-FROM base AS dist
+FROM ${BUILD_IMAGE} AS base
+FROM base AS builder
 
 ARG CMAKE_VERSION
 ARG CMAKE_PATH=/opt/cmake
@@ -29,6 +29,12 @@ RUN cd /tmp                                 \
     && make install DESTDIR=${CMAKE_PATH}   \
     && cd /                                 \
     && rm -rf /tmp/*
+
+
+# dist: только собранный /opt/cmake без тулчейна-сборщика — компактный «дистрибутив»
+FROM ${RUNTIME_IMAGE} AS dist
+ARG CMAKE_PATH=/opt/cmake
+COPY --from=builder ${CMAKE_PATH} ${CMAKE_PATH}
 
 
 FROM ${RUNTIME_IMAGE} AS runtime

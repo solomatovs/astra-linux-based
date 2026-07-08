@@ -1,0 +1,27 @@
+; ============================================================
+; php.ini для php runtime. Реальный файл — artifacts/php.ini,
+; копируется в /usr/local/lib/php.ini. По умолчанию отсутствует —
+; php использует встроенные настройки по умолчанию.
+;
+; Главное назначение — указать php на корпоративный CA (для openssl
+; и curl), если он лежит в /etc/ssl/certs/ca-certificates.crt
+; (куда его кладёт update-ca-certificates из artifacts/ca-chain.crt
+; или запечённый в базовый dmp/glibc образ).
+;
+; Пример:
+;   [PHP]
+;   date.timezone = Europe/Moscow
+;   memory_limit = 256M
+;
+;   ; корпоративный CA для https (openssl-стрима: file_get_contents, streams)
+;   openssl.cafile = /etc/ssl/certs/ca-certificates.crt
+;   ; корпоративный CA для расширения curl
+;   curl.cainfo = /etc/ssl/certs/ca-certificates.crt
+;
+;   ; прокси для php-потоков (если из контура нет прямого выхода)
+;   ; (composer читает свои прокси из HTTP_PROXY/HTTPS_PROXY env или config.json)
+;
+;   [opcache]
+;   opcache.enable = 1
+;   opcache.enable_cli = 0
+; ============================================================

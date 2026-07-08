@@ -1,5 +1,5 @@
 # glibc
-ARG BASE_IMAGE=registry.astralinux.ru/library/orel:2.12
+ARG RUNTIME_IMAGE=registry.astralinux.ru/library/orel:2.12
 ARG PYTHON_IMAGE=registry.astralinux.ru/library/orel:2.12
 ARG GCC_IMAGE=registry.astralinux.ru/library/orel:2.12
 
@@ -21,7 +21,7 @@ RUN mkdir -p /seed \
         cp -a "${GCC_PATH}/." /seed/; \
     fi
 
-FROM ${BASE_IMAGE} AS base
+FROM ${RUNTIME_IMAGE} AS base
 
 # базовая настройка apt/ca
 RUN printf '%s\n'                                                   \
@@ -58,7 +58,7 @@ RUN if ls /tmp/debs/*.deb >/dev/null 2>&1; then \
     && rm -rf /tmp/debs
 
 
-FROM base AS dist
+FROM base AS builder
 
 ARG GLIBC_VERSION
 ARG GLIBC_PATH=/opt/glibc
@@ -90,9 +90,6 @@ RUN if [ -x /usr/local/bin/gcc ]; then                              \
         && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*    \
         ;   \
     fi \
-    && if [ -x /usr/local/bin/python3.11 ]; then                    \
-        ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3;    \
-    fi \
     && ldconfig
 
 # glibc
@@ -117,7 +114,14 @@ RUN cd /tmp                                     \
     && find ${GLIBC_PATH} -name '*.a' ! -name '*nonshared*' -delete \
     && find ${GLIBC_PATH} -type f -name '*.so*' -exec strip --strip-unneeded {} + 2>/dev/null || true \
     && du -h --max-depth=1 ${GLIBC_PATH}        \
-    && cd / && rm -rf /tmp/*
+    && cd / \
+    && rm -rf /tmp/*
+
+
+# dist: только собранный /opt/glibc без сборочного тулчейна — компактный «дистрибутив»
+FROM base AS dist
+ARG GLIBC_PATH=/opt/glibc
+COPY --from=builder ${GLIBC_PATH} ${GLIBC_PATH}
 
 
 FROM base AS runtime
@@ -167,9 +171,9 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         locales         \
         linux-libc-dev  \
-    && rm -rf /var/lib/apt/lists/*                                      \
-    && mkdir -p /usr/lib/x86_64-linux-gnu/locale                        \
-    && localedef -i ru_RU -c -f UTF-8 ru_RU.UTF-8                       \
+    && rm -rf /var/lib/apt/lists/*                  \
+    && mkdir -p /usr/lib/x86_64-linux-gnu/locale    \
+    && localedef -i ru_RU -c -f UTF-8 ru_RU.UTF-8   \
     && locale -a | grep -q '^ru_RU\.utf8$'
 
 ENV LANG=ru_RU.UTF-8        \

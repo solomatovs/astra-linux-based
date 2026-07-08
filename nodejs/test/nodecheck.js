@@ -1,20 +1,20 @@
 // Функциональная проверка рантайма: core-модули, нативные аддоны, сеть, крипто.
 // Всё локально (loopback) — интернет не нужен.
 'use strict';
-const assert = require('node:assert');
+const assert = require('assert');
 
 async function main() {
   // JSON
   assert.deepStrictEqual(JSON.parse('{"a":[1,2,3]}'), { a: [1, 2, 3] });
 
   // crypto (OpenSSL из бинаря node)
-  const crypto = require('node:crypto');
+  const crypto = require('crypto');
   const hash = crypto.createHash('sha256').update('astra').digest('hex');
   assert.strictEqual(hash.length, 64);
   console.log('  crypto  : sha256 ok');
 
   // zlib (сжатие/распаковка)
-  const zlib = require('node:zlib');
+  const zlib = require('zlib');
   const payload = Buffer.from('x'.repeat(1000));
   const packed = zlib.gzipSync(payload);
   assert.ok(packed.length < payload.length);
@@ -22,9 +22,9 @@ async function main() {
   console.log('  zlib    : gzip roundtrip ok');
 
   // fs (temp read/write)
-  const fs = require('node:fs');
-  const os = require('node:os');
-  const path = require('node:path');
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
   const tmp = path.join(os.tmpdir(), 'nodecheck.txt');
   fs.writeFileSync(tmp, 'ok');
   assert.strictEqual(fs.readFileSync(tmp, 'utf8'), 'ok');
@@ -32,7 +32,7 @@ async function main() {
   console.log('  fs      : write/read ok');
 
   // http (loopback round-trip)
-  const http = require('node:http');
+  const http = require('http');
   await new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => res.end('pong'));
     server.listen(0, '127.0.0.1', () => {

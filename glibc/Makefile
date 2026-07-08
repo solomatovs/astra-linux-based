@@ -20,12 +20,12 @@ NO_CACHE			?= 0
 # базова для сборки
 ASTRA_VERSION		?= 2.12
 OREL_IMAGE			:= registry.astralinux.ru/library/orel:$(ASTRA_VERSION)
-PYTHON_IMAGE		?= dmp/python:3.11-dist
-GCC_IMAGE			?= dmp/gcc:8.5.0
+PYTHON_IMAGE		?= dmp/python:3.10-dist
+GCC_IMAGE			?= dmp/gcc:8.5.0-dist
 
 
 # зависимости для сборки разных версий
-# версия           base_image           python_image        gcc_image
+# версия           runtime_image        python_image        gcc_image
 DEPS_2.28		:= $(OREL_IMAGE)        $(OREL_IMAGE)       $(OREL_IMAGE)
 DEPS_2.29		:= dmp/glibc:2.28       $(PYTHON_IMAGE)     $(GCC_IMAGE)
 DEPS_2.30		:= dmp/glibc:2.29       $(PYTHON_IMAGE)     $(GCC_IMAGE)
@@ -77,7 +77,7 @@ help:
 	@echo "  Первое звено ($(FIRST_VERSION)) — поверх orel (glibc 2.24)."
 	@echo "  Каждое следующее собирается предыдущим glibc как базой,"
 	@echo "  компилятор — gcc-образ, python — из python-dist."
-	@echo "  Зависимости (base_image/python/gcc) задаются пословно в DEPS_<версия>."
+	@echo "  Зависимости (runtime_image/python/gcc) задаются пословно в DEPS_<версия>."
 	@echo "  Другая версия: make all VERSION=2.28"
 	@echo ""
 
@@ -151,7 +151,7 @@ dist-%: sources-%
 	set -e
 	set -- $(DEPS_$*)
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist	\
-		--build-arg BASE_IMAGE=$$1								\
+		--build-arg RUNTIME_IMAGE=$$1								\
 		--build-arg PYTHON_IMAGE=$$2							\
 		--build-arg GCC_IMAGE=$$3								\
 		--build-arg GLIBC_VERSION=$$current						\
@@ -170,7 +170,7 @@ build-%: dist-%
 	set -- $(DEPS_$*)
 	# предыдущий glibc уже собран через dist-% -> build-$$prev
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
-		--build-arg BASE_IMAGE=$$1				\
+		--build-arg RUNTIME_IMAGE=$$1			\
 		--build-arg GLIBC_VERSION=$$current		\
 		--build-arg PYTHON_IMAGE=$$2			\
 		--build-arg GCC_IMAGE=$$3				\
@@ -186,24 +186,24 @@ test: test-$(VERSION)
 test-%: build-%
 	@current=$(*)
 	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE):$$current -euc '\
-		echo "== 1. runtime glibc =="; \
-		ldd --version | head -1; \
-		getconf GNU_LIBC_VERSION; \
-		echo "== 2. версия заголовков glibc =="; \
-		grep "define\s*__GLIBC_MINOR__" /usr/include/features.h; \
-		echo "== 3. kernel-заголовки (linux-libc-dev) =="; \
+		echo "== 1. runtime glibc ==";				\
+		ldd --version | head -1; 					\
+		getconf GNU_LIBC_VERSION; 					\
+		echo "== 2. версия заголовков glibc =="; 	\
+		grep "define\s*__GLIBC_MINOR__" /usr/include/features.h; 	\
+		echo "== 3. kernel-заголовки (linux-libc-dev) =="; 			\
 		ls /usr/include/linux/limits.h /usr/include/x86_64-linux-gnu/asm/unistd.h /usr/include/asm-generic/errno.h; \
-		echo "== 4. crt-объекты + libc.so (линковка) =="; \
+		echo "== 4. crt-объекты + libc.so (линковка) =="; 			\
 		ls /usr/lib/x86_64-linux-gnu/crt1.o /usr/lib/x86_64-linux-gnu/crti.o /usr/lib/x86_64-linux-gnu/crtn.o /usr/lib/x86_64-linux-gnu/libc.so; \
-		echo "== 5. fake libc6-dev на hold =="; \
-		dpkg -l libc6-dev | tail -1; \
-		apt-mark showhold | grep -qx libc6-dev && echo "hold: OK" || { echo "hold: FAIL"; exit 1; }; \
-		echo "== 6. apt install НЕ откатывает заголовки =="; \
-		apt-get update >/dev/null 2>&1; \
-		apt-get install -y --no-install-recommends build-essential zlib1g-dev >/dev/null 2>&1; \
-		grep "define\s*__GLIBC_MINOR__" /usr/include/features.h; \
-		echo "== 7. компиляция и запуск проверочной программы =="; \
-		gcc -Wall -O2 /test/glibc_check.c -o /tmp/glibc_check; \
+		echo "== 5. fake libc6-dev на hold =="; 					\
+		dpkg -l libc6-dev | tail -1; 								\
+		apt-mark showhold | grep -qx libc6-dev && echo "hold: OK" || { echo "hold: FAIL"; exit 1; }; 	\
+		echo "== 6. apt install НЕ откатывает заголовки =="; 		\
+		apt-get update >/dev/null 2>&1; 							\
+		apt-get install -y --no-install-recommends build-essential zlib1g-dev >/dev/null 2>&1; 			\
+		grep "define\s*__GLIBC_MINOR__" /usr/include/features.h; 	\
+		echo "== 7. компиляция и запуск проверочной программы =="; 	\
+		gcc -Wall -O2 /test/glibc_check.c -o /tmp/glibc_check; 		\
 		/tmp/glibc_check'
 
 

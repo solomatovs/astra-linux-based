@@ -1,0 +1,14 @@
+{
+    "name": "dmp/php-demo",
+    "description": "smoke-test проект для проверки composer в собранном образе dmp/php",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=7.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Dmp\\Demo\\": "src/"
+        }
+    }
+}

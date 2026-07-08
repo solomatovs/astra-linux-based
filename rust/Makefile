@@ -1,103 +1,174 @@
-BASE_DIR      	?= .
+BASE_DIR      	?= $(abspath .)
 ARTIFACTS     	?= $(BASE_DIR)/artifacts
 BUILD_CONTEXT 	?= $(BASE_DIR)
 TEST_DIR		?= $(BASE_DIR)/test
 
 
 .DEFAULT_GOAL := help
-.PHONY: help debug sources dist build test all
 
-GLIBC_VERSION			?= 2.28
-GCC_VERSION				?= 11.5.0
-CMAKE_VERSION			?= 3.27.9
-PYTHON_VERSION_SHORT	?= 3.11
-MRUSTC_VERSION			?= 0.12.0
-RUST_VERSION    		?= 1.90.0
-NO_CACHE				?= 0
+# список версий, которые поддерживает сборщик
+# версии собираются одна за другой, строго по цепочке
+VERSION_CHAIN		?= 1.90.0
+# целевая версия сборки. по умолчанию берется последняя версия
+# соответственно для ее сборки потребуется собрать все предыдущие версии в цепочки
+VERSION      		?= $(lastword $(VERSION_CHAIN))
+# базовый url адрес для скачивания исходников собираемых в Dockerfile
+RUST_SRC_BASE		?= https://static.rust-lang.org/dist
+MRUSTC_SRC_BASE		?= https://github.com/thepowersgang/mrustc/archive/refs/tags
+APT_DEPS			?= patch curl git zlib1g-dev libssl-dev pkg-config
+# выполнять ли сброс кэша: docker build --no-cache
+NO_CACHE			?= 0
 
-RUST_SRC_BASE			?= https://static.rust-lang.org/dist
-MRUSTC_SRC_BASE			?= https://github.com/thepowersgang/mrustc/archive/refs/tags
-APT_DEPS				?= patch curl git zlib1g-dev libssl-dev pkg-config
+GCC_IMAGE			?= dmp/gcc:8.5.0
+CMAKE_IMAGE			?= dmp/cmake:3.27.9-dist
+PYTHON_IMAGE		?= dmp/python:3.10-dist
 
-BUILD_IMAGE				:= dmp/gcc:$(GCC_VERSION)
-RUNTIME_IMAGE			:= dmp/gcc:$(GCC_VERSION)
-CMAKE_IMAGE				:= dmp/cmake:$(CMAKE_VERSION)-dist
-PYTHON_IMAGE			:= dmp/python:$(PYTHON_VERSION_SHORT)-dist
-IMAGE					:= dmp/rust:$(RUST_VERSION)
-NO_CACHE_TEXT			:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
+# зависимости для сборки разных версии
+# версия       runtime_image   	build_image     cmake_image     python_image    mrustc
+DEPS_1.90.0	:= $(GCC_IMAGE)		$(GCC_IMAGE)	$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	0.12.0
 
-BUILD_ARGS	= \
-	--build-arg BUILD_IMAGE=$(BUILD_IMAGE) 		\
-	--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) 	\
-	--build-arg CMAKE_IMAGE=$(CMAKE_IMAGE) 		\
-	--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) 	\
-	--build-arg MRUSTC_VERSION=$(MRUSTC_VERSION)\
-	--build-arg APT_DEPS="$(APT_DEPS)"			\
-	--build-arg RUST_VERSION=$(RUST_VERSION)
+# базовое название для образа
+IMAGE			:= dmp/rust
+FIRST_VERSION	:= $(firstword $(VERSION_CHAIN))
+NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
 
+# helper: поиск предыдущей версии в VERSION_CHAIN
+prev_of = $(shell echo "$(VERSION_CHAIN)" | awk -v v='$(1)' '{for(i=1;i<=NF;i++){if($$i==v){print p;exit};p=$$i}}')
+
+
+.PHONY: help
 help:
 	@echo "make:"
 	@echo "  make all        собрать всё"
-	@echo "  make sources    скачать mrustc-$(MRUSTC_VERSION) и rustc-$(RUST_VERSION)-src"
-	@echo "  make dist       собрать промежуточный образ-дистрибутив $(IMAGE)-dist"
+	@echo "  make sources    скачать исходники для цепочки вплоть до $(VERSION)"
+	@echo "  make dist       собрать цепочку -dist образов одну за другой до $(VERSION)"
 	@echo "  make build      собрать образ $(IMAGE)"
-	@echo "  make test       проверить образ $(IMAGE): rustc, cargo, компиляция и запуск"
+	@echo "  make test       проверить тулчейн: собрать и запустить test/hello.rs в образе $(IMAGE)"
 	@echo ""
+	@echo "  Цепочка: $(VERSION_CHAIN)"
 	@echo "  rustc собирается ИЗ ИСХОДНИКОВ через mrustc (C++), без бинарного rustc."
-	@echo "  Аналог golang: mrustc — C++-затравка, как Go 1.4 из C."
-	@echo "  Сборщик: $(BUILD_IMAGE), cmake: $(CMAKE_IMAGE), python: $(PYTHON_IMAGE)."
+	@echo "  Зависимости (cmake/python/mrustc) задаются пословно в DEPS_<версия>."
+	@echo "  Другая версия: make all VERSION=1.90.0"
 	@echo ""
 
 
+.PHONY: debug
 debug:
-	@echo BUILD_IMAGE: $(BUILD_IMAGE)
-	@echo RUNTIME_IMAGE: $(RUNTIME_IMAGE)
-	@echo CMAKE_IMAGE: $(CMAKE_IMAGE)
-	@echo PYTHON_IMAGE: $(PYTHON_IMAGE)
-	@echo IMAGE: $(IMAGE)
-	@echo MRUSTC_VERSION: $(MRUSTC_VERSION)
-	@echo RUST_VERSION: $(RUST_VERSION)
-	@echo NO_CACHE_TEXT: $(NO_CACHE_TEXT)
+	$(info BASE_DIR       = $(BASE_DIR))
+	$(info ARTIFACTS      = $(ARTIFACTS))
+	$(info BUILD_CONTEXT  = $(BUILD_CONTEXT))
+	$(info TEST_DIR       = $(TEST_DIR))
+	$(info VERSION_CHAIN  = $(VERSION_CHAIN))
+	$(info VERSION        = $(VERSION))
+	$(info FIRST_VERSION  = $(FIRST_VERSION))
+	$(info RUST_SRC_BASE  = $(RUST_SRC_BASE))
+	$(info MRUSTC_SRC_BASE = $(MRUSTC_SRC_BASE))
+	$(info APT_DEPS       = $(APT_DEPS))
+	$(info NO_CACHE       = $(NO_CACHE))
+	$(info NO_CACHE_TEXT  = $(NO_CACHE_TEXT))
+	$(info IMAGE          = $(IMAGE):$(VERSION))
+	$(info DEPS($(VERSION)) = $(DEPS_$(VERSION)))
+	@true
 
 
-sources:
-	@mkdir -p $(ARTIFACTS)/src
-	@set -e; for spec in \
-	  "$(ARTIFACTS)/src/mrustc-$(MRUSTC_VERSION).tar.gz=$(MRUSTC_SRC_BASE)/v$(MRUSTC_VERSION).tar.gz" \
-	  "$(ARTIFACTS)/src/rustc-$(RUST_VERSION)-src.tar.gz=$(RUST_SRC_BASE)/rustc-$(RUST_VERSION)-src.tar.gz" \
-	; do \
-	  dest="$${spec%%=*}"; url="$${spec#*=}"; \
-	  if [ -f "$$dest" ]; then echo "  ✓ $$dest"; \
-	  else echo ">>> $$url"; curl -fSL -o "$$dest" "$$url"; fi; \
-	done
+# Скачиваем зависимости для сборки дистрибутива
+.PHONY: sources
+sources: sources-$(VERSION)
+
+.ONESHELL:
+sources-%:
+	@current=$(*)
+	@prev='$(call prev_of,$*)'
+	# вызываем рекурсивно предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
+	set -e
+	set -- $(DEPS_$*)
+	mkdir -p $(ARTIFACTS)/src
+	curl -v --skip-existing -o "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" "$(MRUSTC_SRC_BASE)/v$$5.tar.gz"
+	curl -v --skip-existing -o "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz" "$(RUST_SRC_BASE)/rustc-$$current-src.tar.gz"
 
 
-dist:
-	docker build -f Dockerfile --target dist $(NO_CACHE_TEXT) \
-		$(BUILD_ARGS) \
-		--tag $(IMAGE)-dist \
+# docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)
+.PHONY: dist
+dist: dist-$(VERSION)
+
+.ONESHELL:
+dist-%: sources-%
+	@current=$(*)
+	prev='$(call prev_of,$*)'
+	# рекурсивно собираем предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) dist-$$prev || true
+	set -e
+	set -- $(DEPS_$*)
+	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist \
+		--build-arg RUNTIME_IMAGE=$$1			\
+		--build-arg BUILD_IMAGE=$$2				\
+		--build-arg CMAKE_IMAGE=$$3				\
+		--build-arg PYTHON_IMAGE=$$4			\
+		--build-arg MRUSTC_VERSION=$$5			\
+		--build-arg RUST_VERSION=$$current		\
+		--build-arg APT_DEPS="$(APT_DEPS)"		\
+		--tag $(IMAGE):$$current-dist			\
 		--progress plain $(BUILD_CONTEXT)
 
 
-build:
+# docker build - истоговый образ с установленным ПО (установка из дистрибутива)
+.PHONY: build
+build: build-$(VERSION)
+
+.ONESHELL:
+build-%: dist-%
+	@current=$(*)
+	prev='$(call prev_of,$*)'
+	# рекурсивно собираем предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) build-$$prev || true
+	set -e
+	set -- $(DEPS_$*)
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
-		$(BUILD_ARGS) \
-		--tag $(IMAGE) \
+		--build-arg RUNTIME_IMAGE=$$1			\
+		--build-arg BUILD_IMAGE=$$2				\
+		--build-arg CMAKE_IMAGE=$$3				\
+		--build-arg PYTHON_IMAGE=$$4			\
+		--build-arg MRUSTC_VERSION=$$5			\
+		--build-arg RUST_VERSION=$$current		\
+		--build-arg APT_DEPS="$(APT_DEPS)"		\
+		--tag $(IMAGE):$$current				\
 		--progress plain $(BUILD_CONTEXT)
-	@docker images $(IMAGE)
 
 
-test:
-	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE) -euc '\
-		echo "== versions =="; \
-		rustc --version; \
-		rustc --print sysroot; \
-		cargo --version; \
-		echo "== compile hello.rs (rustc) =="; \
-		rustc -O /test/hello.rs -o /tmp/hello && /tmp/hello; \
-		echo "== cargo new + run =="; \
+# тестирование собранного образа
+.PHONY: test
+test: test-$(VERSION)
+
+.ONESHELL:
+test-%: build-%
+	@current=$(*)
+	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE):$$current -euc '\
+		echo "== versions ==";	\
+		rustc --version; 		\
+		rustc --print sysroot; 	\
+		cargo --version; 		\
+		echo "== compile hello.rs (rustc) =="; 					\
+		rustc -O /test/hello.rs -o /tmp/hello && /tmp/hello; 	\
+		echo "== cargo new + run =="; 							\
 		cp -r /test/demo /tmp/demo && cd /tmp/demo && cargo run --release --offline 2>&1 | tail -4'
 
 
+.PHONY: clean
+clean: clean-$(VERSION)
+
+.ONESHELL:
+clean-%:
+	@current=$(*)
+	@prev='$(call prev_of,$*)'
+	# вызываем рекурсивно предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) clean-$$prev || true
+	set -e
+	set -- $(DEPS_$*)
+	mkdir -p $(ARTIFACTS)/src
+	rm -f "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz"
+
+
+.PHONY: all
 all: sources dist build test

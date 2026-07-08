@@ -1,0 +1,19 @@
+# ============================================================
+# npm config для установки ccr в закрытом контуре (Nexus).
+#
+# Нужен ТОЛЬКО если собираемая версия ccr тянет зависимости из реестра.
+# Публикуемый пакет @musistudio/claude-code-router забандлен целиком
+# (dist/cli.js + tiktoken_bg.wasm), поэтому обычно ставится без сети и
+# этот файл не требуется.
+#
+# Скопируйте в artifacts/npmrc и правьте под свой Nexus:
+#
+#   registry=https://nexus.example.ru/repository/npm-group/
+#   //nexus.example.ru/repository/npm-group/:_auth=BASE64(user:pass)
+#   always-auth=true
+#   cafile=/etc/ssl/certs/ca-certificates.crt
+#
+# Корпоративный CA запекается в базовый dmp/glibc:2.28 и виден как
+# /etc/ssl/certs/ca-certificates.crt; node видит его через
+# NODE_EXTRA_CA_CERTS (выставлен в образе dmp/nodejs).
+# ============================================================

@@ -1,13 +1,13 @@
 # llvm
-ARG BASE_IMAGE=dmp/gcc:11.5.0
+ARG BUILD_IMAGE=dmp/gcc:8.5.0
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG CMAKE_IMAGE=dmp/cmake:3.27.9-dist
-ARG PYTHON_IMAGE=dmp/python:3.11-dist
+ARG PYTHON_IMAGE=dmp/python:3.10-dist
 
 FROM ${CMAKE_IMAGE} AS cmake
 FROM ${PYTHON_IMAGE} AS python
-FROM ${BASE_IMAGE} AS base
-FROM base AS dist
+FROM ${BUILD_IMAGE} AS base
+FROM base AS builder
 
 ARG LLVM_VERSION
 ARG NINJA_VERSION
@@ -17,18 +17,17 @@ ARG LLVM_RUNTIMES=
 ARG LLVM_PATH=/opt/llvm
 
 # cmake
-COPY --from=cmake /opt/cmake/usr/local/ /usr/local/
-# python 3.11
-COPY --from=python /opt/python/usr/local/ /usr/local/
+COPY --from=cmake /opt/cmake     /
+# python
+COPY --from=python /opt/python   /
 
-RUN ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3 \
-    && ldconfig
+RUN ldconfig
 
 COPY artifacts/src/ /tmp/src/
 
 # ninja
 RUN cd /tmp \
-    && tar -xf src/ninja-${NINJA_VERSION}.tar.gz \
+    && tar -xf src/v${NINJA_VERSION}.tar.gz \
     && cmake -S ninja-${NINJA_VERSION} -B ninja-build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build ninja-build -j"$(nproc)" \
     && install -m 0755 ninja-build/ninja /usr/local/bin/ninja \
@@ -58,7 +57,7 @@ RUN cd /tmp \
         -DLLDB_ENABLE_LIBEDIT=OFF                   \
         -DLLDB_ENABLE_CURSES=OFF                    \
         -DLLDB_ENABLE_LIBXML2=OFF                   \
-        -DPython3_EXECUTABLE=/usr/local/bin/python3.11 \
+        -DPython3_EXECUTABLE=/usr/local/bin/python3 \
         -DCMAKE_INSTALL_PREFIX=/usr/local           \
     && cmake --build build -j"$(nproc)"             \
     && DESTDIR=${LLVM_PATH} cmake --install build   \
@@ -66,15 +65,21 @@ RUN cd /tmp \
     && rm -rf /tmp/*
 
 
+# dist: только собранный /opt/llvm без тулчейна-сборщика — компактный «дистрибутив»
+FROM ${RUNTIME_IMAGE} AS dist
+ARG LLVM_PATH=/opt/llvm
+COPY --from=builder ${LLVM_PATH} ${LLVM_PATH}
+
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG LLVM_PATH=/opt/llvm
 
 COPY --from=dist ${LLVM_PATH} /
-RUN printf '%s\n' \
-        /usr/local/lib \
-        /usr/local/lib64 \
-        /usr/local/lib/x86_64-pc-linux-gnu \
+RUN printf '%s\n'           \
+        /usr/local/lib      \
+        /usr/local/lib64    \
+        /usr/local/lib/x86_64-pc-linux-gnu  \
         > /etc/ld.so.conf.d/llvm-local.conf \
     && ldconfig
 

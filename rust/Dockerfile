@@ -1,12 +1,27 @@
 # rust
-ARG BUILD_IMAGE=dmp/gcc:11.5.0
-ARG RUNTIME_IMAGE=dmp/gcc:11.5.0
+ARG RUNTIME_IMAGE=dmp/gcc:8.5.0
+ARG BUILD_IMAGE=dmp/gcc:8.5.0
 ARG CMAKE_IMAGE=dmp/cmake:3.27.9-dist
-ARG PYTHON_IMAGE=dmp/python:3.11-dist
+ARG PYTHON_IMAGE=dmp/python:3.10-dist
+
+FROM ${BUILD_IMAGE} AS prev
+ARG RUST_PATH=/opt/rust
+
+# надо проверить prev образ, существует ли там новый скомпилированный rust /opt/rust
+# если он есть, то копируем rust в папку /seed
+# так как BUILD_IMAGE может быть двух вариантов:
+# 1. базовый gcc образ
+# 2. предыдущий rust образ
+RUN mkdir -p /seed \
+    && if [ -d "${RUST_PATH}" ] && [ -n "$(ls -A "${RUST_PATH}" 2>/dev/null)" ]; then \
+        cp -a "${RUST_PATH}/." /seed/; \
+    fi
 
 FROM ${CMAKE_IMAGE} AS cmake
 FROM ${PYTHON_IMAGE} AS python
-FROM ${BUILD_IMAGE} AS dist
+
+FROM ${RUNTIME_IMAGE} AS base
+FROM base AS builder
 
 ARG MRUSTC_VERSION
 ARG RUST_VERSION
@@ -16,9 +31,14 @@ ARG RUST_PATH=/opt/rust
 # cmake, python from another image
 COPY --from=cmake  /opt/cmake  /
 COPY --from=python /opt/python /
-RUN ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3 && ldconfig
-RUN apt-get update && apt-get install -y --no-install-recommends ${APT_DEPS} \
+RUN ldconfig
+
+RUN apt-get update                                              \
+    && apt-get install -y --no-install-recommends ${APT_DEPS}   \
     && rm -rf /var/lib/apt/lists/*
+
+# копируем rust из предыдущего образа если он есть в этом образе
+COPY --from=prev /seed/ /
 
 WORKDIR /build
 COPY artifacts/src/mrustc-${MRUSTC_VERSION}.tar.gz /build/
@@ -51,7 +71,13 @@ RUN set -eux; \
     ls -la ${RUST_PATH}/usr/local/bin
 
 
-FROM ${RUNTIME_IMAGE} AS runtime
+# dist: только установленный тулчейн /opt/rust/usr/local без сборочного дерева — компактный «дистрибутив»
+FROM base AS dist
+ARG RUST_PATH=/opt/rust
+COPY --from=builder ${RUST_PATH}/usr/local ${RUST_PATH}/usr/local
+
+
+FROM base AS runtime
 
 ARG RUST_PATH=/opt/rust
 

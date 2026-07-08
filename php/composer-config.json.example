@@ -1,0 +1,35 @@
+{
+    "_comment": [
+        "Глобальный конфиг composer для закрытого контура (nexus).",
+        "Реальный файл — artifacts/composer-config.json, копируется в",
+        "$COMPOSER_HOME/config.json (/usr/local/composer/config.json).",
+        "По умолчанию отсутствует — composer ходит в packagist.org.",
+        "",
+        "Ниже — пример проксирования репозитория через nexus:",
+        "  - packagist.org отключается",
+        "  - вместо него подключается composer-репозиторий nexus",
+        "  - при необходимости прописываются http-basic креды",
+        "Проверить в образе: composer config --global --list | grep repositories",
+        "CA для https берётся из /etc/ssl/certs/ca-certificates.crt",
+        "(корпоративный CA запекается в базовый образ или в artifacts/ca-chain.crt)."
+    ],
+
+    "config": {
+        "secure-http": true
+    },
+
+    "repositories": {
+        "packagist.org": false,
+        "nexus": {
+            "type": "composer",
+            "url": "https://nexus.internal.example.com/repository/composer-group/"
+        }
+    }
+
+    ,"//http-basic": {
+        "nexus.internal.example.com": {
+            "username": "USER",
+            "password": "PASSWORD"
+        }
+    }
+}

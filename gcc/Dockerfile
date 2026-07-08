@@ -1,13 +1,13 @@
 # gcc
-ARG BASE_IMAGE=dmp/glibc:2.28
-ARG BUILDER_IMAGE=dmp/glibc:2.28
+ARG RUNTIME_IMAGE=dmp/glibc:2.28
+ARG BUILD_IMAGE=dmp/glibc:2.28
 
-FROM ${BUILDER_IMAGE} AS prev
+FROM ${BUILD_IMAGE} AS prev
 ARG GCC_PATH=/opt/gcc
 
 # надо проверить prev образ, существует ли там новый скомпилированный gcc /opt/gcc
 # если он есть, то копируем gcc в папку /seed
-# так как BUILDER_IMAGE может быть двух вариантов:
+# так как BUILD_IMAGE может быть двух вариантов:
 # 1. базовый glibc образ
 # 2. предыдущий gcc образ
 RUN mkdir -p /seed \
@@ -15,8 +15,8 @@ RUN mkdir -p /seed \
         cp -a "${GCC_PATH}/." /seed/; \
     fi
 
-FROM ${BASE_IMAGE} AS base
-FROM base AS dist
+FROM ${RUNTIME_IMAGE} AS base
+FROM base AS builder
 
 ARG GCC_VERSION
 ARG GMP_VERSION
@@ -129,6 +129,13 @@ RUN cd /tmp                                     \
     && du -h --max-depth=1 ${GCC_PATH}          \
     && cd /                                     \
     && rm -rf /tmp/*
+
+
+# dist: только собранный /opt/gcc + /usr/include без сборочного тулчейна — компактный «дистрибутив»
+FROM base AS dist
+ARG GCC_PATH=/opt/gcc
+COPY --from=builder ${GCC_PATH} ${GCC_PATH}
+COPY --from=builder /usr/include/ /usr/include/
 
 
 FROM base AS runtime

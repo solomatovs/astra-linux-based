@@ -17,10 +17,12 @@ BASE_URL			?= https://github.com/Kitware/CMake/releases/download
 # выполнять ли сброс кэша: docker build --no-cache
 NO_CACHE			?= 0
 
+GLIBC_IMAGE			?= dmp/glibc:2.28
+GCC_IMAGE			?= dmp/gcc:8.5.0
 
 # зависимости для сборки разных версии
-# версия           base_image        runtime_image
-DEPS_3.27.9		:= dmp/gcc:8.5.0    dmp/glibc:2.28
+# версия           runtime_image     build_image
+DEPS_3.27.9		:= $(GLIBC_IMAGE)    $(GCC_IMAGE)
 
 # базовое название для образа
 IMAGE			:= dmp/cmake
@@ -42,7 +44,7 @@ help:
 	@echo "  make test       проверить образ $(IMAGE): версия, capabilities, configure NONE-проекта"
 	@echo ""
 	@echo "  Цепочка: $(VERSION_CHAIN)"
-	@echo "  Зависимости (base_image/runtime_image) задаются пословно в DEPS_<версия>."
+	@echo "  Зависимости (runtime_image/build_image) задаются пословно в DEPS_<версия>."
 	@echo "  Другая версия: make all VERSION=3.27.9"
 	@echo ""
 
@@ -92,10 +94,10 @@ dist-%: sources-%
 	set -e
 	set -- $(DEPS_$*)
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist \
-		--build-arg BASE_IMAGE=$$1 \
-		--build-arg RUNTIME_IMAGE=$$2 \
-		--build-arg CMAKE_VERSION=$$current \
-		--tag $(IMAGE):$$current-dist \
+		--build-arg RUNTIME_IMAGE=$$1 			\
+		--build-arg BUILD_IMAGE=$$2 			\
+		--build-arg CMAKE_VERSION=$$current 	\
+		--tag $(IMAGE):$$current-dist 			\
 		--progress plain $(BUILD_CONTEXT)
 
 
@@ -112,8 +114,8 @@ build-%: dist-%
 	set -e
 	set -- $(DEPS_$*)
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
-		--build-arg BASE_IMAGE=$$1				\
-		--build-arg RUNTIME_IMAGE=$$2			\
+		--build-arg RUNTIME_IMAGE=$$1			\
+		--build-arg BUILD_IMAGE=$$2				\
 		--build-arg CMAKE_VERSION=$$current		\
 		--tag $(IMAGE):$$current				\
 		--progress plain $(BUILD_CONTEXT)
@@ -127,13 +129,13 @@ test: test-$(VERSION)
 test-%: build-%
 	@current=$(*)
 	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE):$$current -euc '\
-		echo "== version =="; \
-		cmake --version; \
-		echo "== capabilities (generators) =="; \
-		cmake -E capabilities | head -c 200; echo; \
-		echo "== script-режим (cmake -P) =="; \
-		cmake -P /test/selfcheck.cmake; \
-		echo "== cmake -E =="; \
+		echo "== version ==";						\
+		cmake --version; 							\
+		echo "== capabilities (generators) =="; 	\
+		cmake -E capabilities | head -c 200; echo; 	\
+		echo "== script-режим (cmake -P) =="; 		\
+		cmake -P /test/selfcheck.cmake; 			\
+		echo "== cmake -E =="; 						\
 		cmake -E make_directory /tmp/x && cmake -E echo "cmake -E works"'
 
 
