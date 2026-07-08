@@ -28,6 +28,15 @@ ARG APT_DEPS
 ARG GCC_PATH=/opt/gcc
 
 
+RUN printf '%s\n'                                                   \
+        'APT::Get::AllowUnauthenticated "true";'                    \
+        'Acquire::AllowInsecureRepositories "true";'                \
+        'Acquire::AllowDowngradeToInsecureRepositories "true";'     \
+        > /etc/apt/apt.conf.d/99insecure                            \
+    && printf '%s\n'                                                \
+        'Dpkg::Options { "--force-confdef"; "--force-confold"; };'  \
+        > /etc/apt/apt.conf.d/90noninteractive
+
 # apt-sources.list replace
 COPY apt-sources.list* /tmp/aptsrc/
 RUN if [ -f /tmp/aptsrc/apt-sources.list ] && grep -qvE '^[[:space:]]*(#|$)' /tmp/aptsrc/apt-sources.list; then \
