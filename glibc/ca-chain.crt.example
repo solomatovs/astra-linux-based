@@ -1,0 +1,21 @@
+# ============================================================
+# Корпоративные CA-сертификаты (цепочка, PEM).
+#
+# По умолчанию файл без BEGIN/END CERTIFICATE — Dockerfile.base
+# пропускает update-ca-certificates (используется публичный bundle
+# из astra rootfs).
+#
+# Для закрытого контура вставьте сюда цепочку своих CA:
+#
+#   -----BEGIN CERTIFICATE-----
+#   MIID... (root CA)
+#   -----END CERTIFICATE-----
+#   -----BEGIN CERTIFICATE-----
+#   MIID... (intermediate CA)
+#   -----END CERTIFICATE-----
+#
+# Будет скопирован в /usr/local/share/ca-certificates/ca-chain.crt
+# и добавлен в /etc/ssl/certs/ca-certificates.crt. Рантайм (Python
+# httpx/requests/openai) читает этот bundle через SSL_CERT_FILE и
+# REQUESTS_CA_BUNDLE env-переменные.
+# ============================================================

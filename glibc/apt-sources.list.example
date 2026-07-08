@@ -1,0 +1,13 @@
+# ============================================================
+# Custom apt sources for boba-base build.
+#
+# По умолчанию файл пустой (только комментарии) — Dockerfile.base
+# использует источники, встроенные в astra_linux_ce_2.12-rootfs.
+#
+# Для закрытого контура раскомментируйте/добавьте свои строки:
+#   deb http://apt.internal.example.com/astra 2.12_x86-64 main contrib non-free
+#   deb http://apt.internal.example.com/debian buster main
+#
+# GPG-ключей не требуется: apt настроен доверять любым репо
+# (см. /etc/apt/apt.conf.d/99insecure в Dockerfile.base).
+# ============================================================
