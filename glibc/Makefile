@@ -8,7 +8,7 @@ TEST_DIR		?= $(BASE_DIR)/test
 
 # список версий, которые поддерживает сборщик
 # версии собираются одна за другой, строго по цепочке
-VERSION_CHAIN		?= 2.28 2.29 2.30 2.31 2.32 2.34 2.35 2.36 2.37 2.38 2.39 2.40 2.41 2.42 2.43
+VERSION_CHAIN		?= 2.28 2.29 2.30 2.31 2.32 2.33 2.34 2.35 2.36 2.37 2.38 2.39 2.40 2.41 2.42 2.43
 # целевая версия сборки. по умолчанию берётся последняя версия
 # соответственно для её сборки потребуется собрать все предыдущие версии в цепочке
 VERSION      		?= $(lastword $(VERSION_CHAIN))
@@ -31,7 +31,8 @@ DEPS_2.29		:= dmp/glibc:2.28       $(PYTHON_IMAGE)     $(GCC_IMAGE)
 DEPS_2.30		:= dmp/glibc:2.29       $(PYTHON_IMAGE)     $(GCC_IMAGE)
 DEPS_2.31		:= dmp/glibc:2.30       $(PYTHON_IMAGE)     $(GCC_IMAGE)
 DEPS_2.32		:= dmp/glibc:2.31       $(PYTHON_IMAGE)     $(GCC_IMAGE)
-DEPS_2.34		:= dmp/glibc:2.32       $(PYTHON_IMAGE)     $(GCC_IMAGE)
+DEPS_2.33		:= dmp/glibc:2.32       $(PYTHON_IMAGE)     $(GCC_IMAGE)
+DEPS_2.34		:= dmp/glibc:2.33       $(PYTHON_IMAGE)     $(GCC_IMAGE)
 DEPS_2.35		:= dmp/glibc:2.34       $(PYTHON_IMAGE)     $(GCC_IMAGE)
 DEPS_2.36		:= dmp/glibc:2.35       $(PYTHON_IMAGE)     $(GCC_IMAGE)
 DEPS_2.37		:= dmp/glibc:2.36       $(PYTHON_IMAGE)     $(GCC_IMAGE)
