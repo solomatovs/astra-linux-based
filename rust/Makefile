@@ -85,8 +85,8 @@ sources-%:
 	set -e
 	set -- $(DEPS_$*)
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -o "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" "$(MRUSTC_SRC_BASE)/v$$5.tar.gz"
-	curl -v --skip-existing -o "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz" "$(RUST_SRC_BASE)/rustc-$$current-src.tar.gz"
+	[ -f "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" ] || curl -v -o "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" "$(MRUSTC_SRC_BASE)/v$$5.tar.gz"
+	[ -f "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz" ] || curl -v -o "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz" "$(RUST_SRC_BASE)/rustc-$$current-src.tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

@@ -83,7 +83,7 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -o "$(ARTIFACTS)/src/golang-$$current.tar.gz" "$(BASE_URL)/go$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/golang-$$current.tar.gz" ] || curl -v -o "$(ARTIFACTS)/src/golang-$$current.tar.gz" "$(BASE_URL)/go$$current.tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

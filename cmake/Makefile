@@ -78,7 +78,7 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -L -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/v$$current/cmake-$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/cmake-$$current.tar.gz" ] || curl -v -L -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/v$$current/cmake-$$current.tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

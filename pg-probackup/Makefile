@@ -45,9 +45,9 @@ sources-%:
 	@current=$(*)
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/pg_probackup-$(PROBACKUP_VER).tar.gz" \
+	[ -f "$(ARTIFACTS)/src/pg_probackup-$(PROBACKUP_VER).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/pg_probackup-$(PROBACKUP_VER).tar.gz" \
 		"$(GH)/postgrespro/pg_probackup/archive/refs/tags/$(PROBACKUP_VER).tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" \
+	[ -f "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" ] || curl -v -L -o "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" \
 		"$(PG_URL)/v$$current/postgresql-$$current.tar.bz2"
 
 

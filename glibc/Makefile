@@ -116,7 +116,7 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/glibc/glibc-$$current.tar.xz"
+	[ -f "$(ARTIFACTS)/src/glibc-$$current.tar.xz" ] || curl -v -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/glibc/glibc-$$current.tar.xz"
 
 
 # Скачиваем .deb для bootstrap закрытого контура

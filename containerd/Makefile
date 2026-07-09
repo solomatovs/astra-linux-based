@@ -82,7 +82,7 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -L -o "$(ARTIFACTS)/src/containerd-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/containerd-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/containerd-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

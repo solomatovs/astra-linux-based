@@ -65,13 +65,13 @@ sources:
 	mkdir -p $(ARTIFACTS)/src
 	cd $(ARTIFACTS)/src
 	for v in $(PGAUDIT_VERS); do \
-		curl -v -L --skip-existing -o "pgaudit-$$v.tar.gz" "$(GH)/pgaudit/pgaudit/archive/refs/tags/$$v.tar.gz"; done
-	curl -v -L --skip-existing -o "pgvector-$(PGVECTOR_VER).tar.gz"   "$(GH)/pgvector/pgvector/archive/refs/tags/v$(PGVECTOR_VER).tar.gz"
-	curl -v -L --skip-existing -o "pg_cron-$(PGCRON_VER).tar.gz"      "$(GH)/citusdata/pg_cron/archive/refs/tags/v$(PGCRON_VER).tar.gz"
-	curl -v -L --skip-existing -o "pg_repack-$(PGREPACK_VER).tar.gz"  "$(GH)/reorg/pg_repack/archive/refs/tags/ver_$(PGREPACK_VER).tar.gz"
-	curl -v -L --skip-existing -o "pg_partman-$(PARTMAN_V4).tar.gz"   "$(GH)/pgpartman/pg_partman/archive/refs/tags/v$(PARTMAN_V4).tar.gz"
-	curl -v -L --skip-existing -o "pg_partman-$(PARTMAN_V5).tar.gz"   "$(GH)/pgpartman/pg_partman/archive/refs/tags/v$(PARTMAN_V5).tar.gz"
-	curl -v -L --skip-existing -o "timescaledb-$(TIMESCALE_VER).tar.gz" "$(GH)/timescale/timescaledb/archive/refs/tags/$(TIMESCALE_VER).tar.gz"
+		[ -f "pgaudit-$$v.tar.gz" ] || curl -v -L -o "pgaudit-$$v.tar.gz" "$(GH)/pgaudit/pgaudit/archive/refs/tags/$$v.tar.gz"; done
+	[ -f "pgvector-$(PGVECTOR_VER).tar.gz" ] || curl -v -L -o "pgvector-$(PGVECTOR_VER).tar.gz"   "$(GH)/pgvector/pgvector/archive/refs/tags/v$(PGVECTOR_VER).tar.gz"
+	[ -f "pg_cron-$(PGCRON_VER).tar.gz" ] || curl -v -L -o "pg_cron-$(PGCRON_VER).tar.gz"      "$(GH)/citusdata/pg_cron/archive/refs/tags/v$(PGCRON_VER).tar.gz"
+	[ -f "pg_repack-$(PGREPACK_VER).tar.gz" ] || curl -v -L -o "pg_repack-$(PGREPACK_VER).tar.gz"  "$(GH)/reorg/pg_repack/archive/refs/tags/ver_$(PGREPACK_VER).tar.gz"
+	[ -f "pg_partman-$(PARTMAN_V4).tar.gz" ] || curl -v -L -o "pg_partman-$(PARTMAN_V4).tar.gz"   "$(GH)/pgpartman/pg_partman/archive/refs/tags/v$(PARTMAN_V4).tar.gz"
+	[ -f "pg_partman-$(PARTMAN_V5).tar.gz" ] || curl -v -L -o "pg_partman-$(PARTMAN_V5).tar.gz"   "$(GH)/pgpartman/pg_partman/archive/refs/tags/v$(PARTMAN_V5).tar.gz"
+	[ -f "timescaledb-$(TIMESCALE_VER).tar.gz" ] || curl -v -L -o "timescaledb-$(TIMESCALE_VER).tar.gz" "$(GH)/timescale/timescaledb/archive/refs/tags/$(TIMESCALE_VER).tar.gz"
 
 
 # docker build - базовый postgres + расширения

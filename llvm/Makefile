@@ -94,7 +94,7 @@ sources-%:
 	for spec in \
 		"$(BASE_URL)/llvmorg-$$current/llvm-project-$$current.src.tar.xz"	\
 		"$(NINJA_URL)/v$$5.tar.gz"	\
-	; do curl -v --skip-existing -L -O --output-dir "$(ARTIFACTS)/src" $$spec ;
+	; do [ -f "$(ARTIFACTS)/src/$${spec##*/}" ] || curl -v -L -O --output-dir "$(ARTIFACTS)/src" "$$spec" ;
 	done
 
 

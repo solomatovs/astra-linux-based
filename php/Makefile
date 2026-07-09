@@ -122,12 +122,12 @@ sources-%:
 	zlib=$$3; curl=$$4; libpq=$$5; zip=$$6; composer=$$7
 	mkdir -p $(ARTIFACTS)/src
 	# полные url собираются из базового url и версии (версии — в DEPS_<версия>)
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/php-$$current.tar.xz" "$(BASE_URL)/php-$$current.tar.xz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" "$(ZLIB_URL)/v$$zlib/zlib-$$zlib.tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/curl-$$curl.tar.xz" "$(CURL_URL)/curl-$$curl.tar.xz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/postgresql-$$libpq.tar.bz2" "$(LIBPQ_URL)/v$$libpq/postgresql-$$libpq.tar.bz2"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/libzip-$$zip.tar.xz" "$(ZIP_URL)/libzip-$$zip.tar.xz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/composer-$$composer.phar" "$(COMPOSER_URL)/$$composer/composer.phar"
+	[ -f "$(ARTIFACTS)/src/php-$$current.tar.xz" ] || curl -v -L -o "$(ARTIFACTS)/src/php-$$current.tar.xz" "$(BASE_URL)/php-$$current.tar.xz"
+	[ -f "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" "$(ZLIB_URL)/v$$zlib/zlib-$$zlib.tar.gz"
+	[ -f "$(ARTIFACTS)/src/curl-$$curl.tar.xz" ] || curl -v -L -o "$(ARTIFACTS)/src/curl-$$curl.tar.xz" "$(CURL_URL)/curl-$$curl.tar.xz"
+	[ -f "$(ARTIFACTS)/src/postgresql-$$libpq.tar.bz2" ] || curl -v -L -o "$(ARTIFACTS)/src/postgresql-$$libpq.tar.bz2" "$(LIBPQ_URL)/v$$libpq/postgresql-$$libpq.tar.bz2"
+	[ -f "$(ARTIFACTS)/src/libzip-$$zip.tar.xz" ] || curl -v -L -o "$(ARTIFACTS)/src/libzip-$$zip.tar.xz" "$(ZIP_URL)/libzip-$$zip.tar.xz"
+	[ -f "$(ARTIFACTS)/composer-$$composer.phar" ] || curl -v -L -o "$(ARTIFACTS)/composer-$$composer.phar" "$(COMPOSER_URL)/$$composer/composer.phar"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

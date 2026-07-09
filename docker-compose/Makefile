@@ -86,7 +86,7 @@ sources-%:
 	set -- $(DEPS_$*)
 	build_image=$$2
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -L -o "$(ARTIFACTS)/src/compose-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/compose-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/compose-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
 	# вендорим в контейнере build-образа, результат — self-contained тарбол для офлайн docker build
 	if [ ! -f "$(ARTIFACTS)/src/compose-$$current-vendored.tar.gz" ]; then
 		docker run --rm -v "$(ARTIFACTS)/src":/src -w /work \

@@ -101,9 +101,9 @@ sources-%:
 	openssl=$$4; libyaml=$$5
 	mkdir -p $(ARTIFACTS)/src
 	# полные url собираются из базового url и версии (версии — в DEPS_<версия>)
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" "$(LIBYAML_URL)/$$libyaml/yaml-$$libyaml.tar.gz"
+	[ -f "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
+	[ -f "$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" "$(LIBYAML_URL)/$$libyaml/yaml-$$libyaml.tar.gz"
 
 
 # docker build --target dist - дистрибутив со скомпилированными исходниками (без установки в систему)

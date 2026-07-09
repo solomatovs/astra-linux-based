@@ -103,7 +103,7 @@ sources-%:
 			-C "$(ARTIFACTS)/src" --exclude='.git' "ClickHouse-$$current";	\
 		rm -rf "$(ARTIFACTS)/src/ClickHouse-$$current";						\
 	fi
-	curl -v --skip-existing -L -o "$(ARTIFACTS)/src/ninja-$$8.tar.gz" "$(NINJA_URL)/v$$8.tar.gz"
+	[ -f "$(ARTIFACTS)/src/ninja-$$8.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/ninja-$$8.tar.gz" "$(NINJA_URL)/v$$8.tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

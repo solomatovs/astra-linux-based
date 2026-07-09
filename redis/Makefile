@@ -81,7 +81,7 @@ sources-%:
 	@current=$(*)
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/redis-$$current.tar.gz" \
+	[ -f "$(ARTIFACTS)/src/redis-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/redis-$$current.tar.gz" \
 		"$(BASE_URL)/redis-$$current.tar.gz"
 
 

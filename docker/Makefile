@@ -91,8 +91,8 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -L -o "$(ARTIFACTS)/src/moby-$$current.tar.gz" "$(MOBY_URL)/v$$current.tar.gz"
-	curl -v --skip-existing -L -o "$(ARTIFACTS)/src/cli-$$current.tar.gz"  "$(CLI_URL)/v$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/moby-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/moby-$$current.tar.gz" "$(MOBY_URL)/v$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/cli-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/cli-$$current.tar.gz"  "$(CLI_URL)/v$$current.tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

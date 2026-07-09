@@ -111,7 +111,7 @@ sources-%:
 		"$(ARTIFACTS)/src/samba-$$current.tar.gz=https://download.samba.org/pub/samba/stable/samba-$$current.tar.gz" \
 	; do \
 		dest="$${spec%%=*}"; url="$${spec#*=}"; \
-		curl -v --skip-existing -L -o "$$dest" "$$url"; \
+		[ -f "$$dest" ] || curl -v -L -o "$$dest" "$$url"; \
 	done
 
 

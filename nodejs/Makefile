@@ -97,8 +97,8 @@ sources-%:
 	set -e
 	set -- $(DEPS_$*)
 	mkdir -p $(ARTIFACTS)/src
-	curl -v --skip-existing -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/v$$current/node-v$$current.tar.xz"
-	curl -v --skip-existing -O --output-dir "$(ARTIFACTS)/src" "$(PNPM_URL)/pnpm-$$8.tgz"
+	[ -f "$(ARTIFACTS)/src/node-v$$current.tar.xz" ] || curl -v -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/v$$current/node-v$$current.tar.xz"
+	[ -f "$(ARTIFACTS)/src/pnpm-$$8.tgz" ] || curl -v -O --output-dir "$(ARTIFACTS)/src" "$(PNPM_URL)/pnpm-$$8.tgz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

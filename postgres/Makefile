@@ -112,7 +112,7 @@ sources-%:
 	@current=$(*)
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" \
+	[ -f "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" ] || curl -v -L -o "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" \
 		"$(BASE_URL)/v$$current/postgresql-$$current.tar.bz2"
 
 

@@ -120,14 +120,14 @@ sources-%:
 	pcre2=$$3; zlib=$$4; openssl=$$5
 	mkdir -p $(ARTIFACTS)/src
 	# полные url собираются из базового url и версии (версии — в DEPS_<версия>)
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/nginx-$$current.tar.gz" "$(BASE_URL)/nginx-$$current.tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" "$(PCRE2_URL)/pcre2-$$pcre2/pcre2-$$pcre2.tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" "$(ZLIB_URL)/v$$zlib/zlib-$$zlib.tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
+	[ -f "$(ARTIFACTS)/src/nginx-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/nginx-$$current.tar.gz" "$(BASE_URL)/nginx-$$current.tar.gz"
+	[ -f "$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" "$(PCRE2_URL)/pcre2-$$pcre2/pcre2-$$pcre2.tar.gz"
+	[ -f "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" "$(ZLIB_URL)/v$$zlib/zlib-$$zlib.tar.gz"
+	[ -f "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
 	# модули kerberos/AD + их зависимости (общие для всех версий)
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" "$(KRB5_URL)/$(KRB5_SERIES)/krb5-$(KRB5_VERSION).tar.gz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" "$(OPENLDAP_URL)/openldap-$(OPENLDAP_VERSION).tgz"
-	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" "$(LDAP_MODULE_URL)/$(LDAP_MODULE_REF).tar.gz"
+	[ -f "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" "$(KRB5_URL)/$(KRB5_SERIES)/krb5-$(KRB5_VERSION).tar.gz"
+	[ -f "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" ] || curl -v -L -o "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" "$(OPENLDAP_URL)/openldap-$(OPENLDAP_VERSION).tgz"
+	[ -f "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" "$(LDAP_MODULE_URL)/$(LDAP_MODULE_REF).tar.gz"
 
 
 # docker build --target dist - дистрибутив со скомпилированными исходниками (без установки в систему)
