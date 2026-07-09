@@ -14,10 +14,16 @@ auth_gss_group_sid grafana-editors S-1-5-21-1111111111-2222222222-3333333333-110
 auth_gss_group_sid grafana-viewers S-1-5-21-1111111111-2222222222-3333333333-1109;
 
 # --- имя группы -> роль (первое совпадение выигрывает: Admin > Editor > Viewer) ---
+# ВАЖНО: дефолт ПУСТОЙ, а не Viewer. Если групп нет (напр. Basic-фолбэк без Kerberos,
+# где PAC отсутствует), пустой $grafana_role => nginx не шлёт X-WEBAUTH-ROLE =>
+# Grafana сохраняет текущую роль пользователя и не даунгрейдит существующего админа
+# (иначе auth.proxy отвергает форс-роль на server-admin аккаунте -> 401 Unauthorized).
+# Новым юзерам роль назначит [users] auto_assign_org_role.
 map $spnego_groups $grafana_role {
-    default                   Viewer;
+    default                      "";
     "~(^|,)grafana-admins(,|$)"  Admin;
     "~(^|,)grafana-editors(,|$)" Editor;
+    "~(^|,)grafana-viewers(,|$)" Viewer;
 }
 
 server {
