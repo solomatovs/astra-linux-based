@@ -22,8 +22,22 @@ ZLIB_URL			?= https://github.com/madler/zlib/releases/download
 OPENSSL_URL			?= https://github.com/openssl/openssl/releases/download
 # docker build --no-cache
 NO_CACHE			?= 0
-# apt-deps (build): perl нужен для OpenSSL Configure
-APT_DEPS			?= perl
+# apt-deps (build): perl — OpenSSL Configure, bison/flex — krb5, file — libtool (openldap)
+APT_DEPS			?= perl bison flex file
+
+# --- модули kerberos/AD и их зависимости (одинаковы для всех версий nginx) ---
+# MIT krb5 (SPNEGO/Kerberos), как в samba-ad
+KRB5_VERSION		?= 1.21.3
+KRB5_SERIES			?= 1.21
+KRB5_URL			?= https://kerberos.org/dist/krb5
+# OpenLDAP client (auth_ldap)
+OPENLDAP_VERSION	?= 2.6.9
+OPENLDAP_URL		?= https://www.openldap.org/software/download/OpenLDAP/openldap-release
+# spnego-http-auth-nginx-module (auth_gss) — вендоренный форк в подпапке
+# spnego-http-auth-nginx-module/, собирается локально (не скачивается)
+# nginx-auth-ldap (auth_ldap) — без релизов, тянем ветку
+LDAP_MODULE_REF		?= master
+LDAP_MODULE_URL		?= https://github.com/kvspb/nginx-auth-ldap/archive/refs/heads
 
 GLIBC_IMAGE			?= dmp/glibc:2.28
 GCC_IMAGE			?= dmp/gcc:8.5.0-dist
@@ -58,6 +72,8 @@ help:
 	@echo "  Цепочка: $(VERSION_CHAIN)"
 	@echo "  Каждая версия собирается тулчейном dmp/gcc, рантайм — чистый dmp/glibc."
 	@echo "  PCRE2/zlib/OpenSSL линкуются СТАТИЧЕСКИ — runtime-.so не требуются."
+	@echo "  Модули kerberos/AD: spnego (auth_gss) + nginx-auth-ldap (auth_ldap);"
+	@echo "  krb5/openldap собираются из исходников (как в samba-ad), .so копируются в рантайм."
 	@echo "  Каждый образ тегируется полной и короткой версией (напр. 1.28.0 и 1.28)."
 	@echo "  Версии зависимостей и флаг http3 — в DEPS_<версия> (http_v3 только nginx >= 1.25)."
 	@echo "  Свой конфиг: nginx.conf.example -> nginx.conf."
@@ -81,6 +97,9 @@ debug:
 	$(info NO_CACHE       = $(NO_CACHE))
 	$(info NO_CACHE_TEXT  = $(NO_CACHE_TEXT))
 	$(info APT_DEPS       = $(APT_DEPS))
+	$(info KRB5_VERSION   = $(KRB5_VERSION))
+	$(info OPENLDAP_VERSION = $(OPENLDAP_VERSION))
+	$(info LDAP_MODULE_REF  = $(LDAP_MODULE_REF))
 	$(info IMAGE          = $(IMAGE):$(VERSION))
 	$(info DEPS($(VERSION)) = $(DEPS_$(VERSION)))
 	@true
@@ -105,6 +124,10 @@ sources-%:
 	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" "$(PCRE2_URL)/pcre2-$$pcre2/pcre2-$$pcre2.tar.gz"
 	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" "$(ZLIB_URL)/v$$zlib/zlib-$$zlib.tar.gz"
 	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
+	# модули kerberos/AD + их зависимости (общие для всех версий)
+	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" "$(KRB5_URL)/$(KRB5_SERIES)/krb5-$(KRB5_VERSION).tar.gz"
+	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" "$(OPENLDAP_URL)/openldap-$(OPENLDAP_VERSION).tgz"
+	curl -v -L --skip-existing -o "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" "$(LDAP_MODULE_URL)/$(LDAP_MODULE_REF).tar.gz"
 
 
 # docker build --target dist - дистрибутив со скомпилированными исходниками (без установки в систему)
@@ -129,6 +152,9 @@ dist-%: sources-%
 		--build-arg ZLIB_VERSION=$$zlib 		\
 		--build-arg OPENSSL_VERSION=$$openssl 	\
 		--build-arg NGINX_HTTP3=$$http3 		\
+		--build-arg KRB5_VERSION=$(KRB5_VERSION) 			\
+		--build-arg OPENLDAP_VERSION=$(OPENLDAP_VERSION) 	\
+		--build-arg LDAP_MODULE_REF=$(LDAP_MODULE_REF) 		\
 		--build-arg APT_DEPS="$(APT_DEPS)" 		\
 		--tag $(IMAGE):$$current-dist 			\
 		--tag $(IMAGE):$$short-dist 			\
@@ -157,6 +183,9 @@ build-%: dist-%
 		--build-arg ZLIB_VERSION=$$zlib 			\
 		--build-arg OPENSSL_VERSION=$$openssl 		\
 		--build-arg NGINX_HTTP3=$$http3 			\
+		--build-arg KRB5_VERSION=$(KRB5_VERSION) 			\
+		--build-arg OPENLDAP_VERSION=$(OPENLDAP_VERSION) 	\
+		--build-arg LDAP_MODULE_REF=$(LDAP_MODULE_REF) 		\
 		--build-arg APT_DEPS="$(APT_DEPS)" 			\
 		--tag $(IMAGE):$$current 					\
 		--tag $(IMAGE):$$short 						\
@@ -196,7 +225,10 @@ clean-%:
 	rm -f "$(ARTIFACTS)/src/nginx-$$current.tar.gz" \
 		"$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" \
 		"$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" \
-		"$(ARTIFACTS)/src/openssl-$$openssl.tar.gz"
+		"$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" \
+		"$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" \
+		"$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" \
+		"$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz"
 
 
 .PHONY: all

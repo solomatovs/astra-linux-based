@@ -51,4 +51,23 @@ else
     psql -h "$SOCK" -U postgres -Atc "SELECT ('a=>1'::hstore -> 'a');"
 fi
 
+echo "== pl languages =="
+# plperl/pltcl — все версии; plpython3u — 10+
+if [ "$vernum" -ge 90100 ]; then
+    psql -h "$SOCK" -U postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION plperl;'
+    psql -h "$SOCK" -U postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION pltcl;'
+else
+    psql -h "$SOCK" -U postgres -v ON_ERROR_STOP=1 -c 'CREATE LANGUAGE plperl;'
+    psql -h "$SOCK" -U postgres -v ON_ERROR_STOP=1 -c 'CREATE LANGUAGE pltcl;'
+fi
+psql -h "$SOCK" -U postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE FUNCTION plperl_max(int,int) RETURNS int AS \$\$ return \$_[0] > \$_[1] ? \$_[0] : \$_[1]; \$\$ LANGUAGE plperl;"
+psql -h "$SOCK" -U postgres -Atc 'SELECT plperl_max(3,7);'
+echo "plperl/pltcl: OK"
+if [ "$vernum" -ge 100000 ]; then
+    psql -h "$SOCK" -U postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION plpython3u;'
+    psql -h "$SOCK" -U postgres -Atc "DO \$\$ plpy.notice('plpython3u works') \$\$ LANGUAGE plpython3u;" >/dev/null
+    echo "plpython3u: OK"
+fi
+
 echo "== OK =="

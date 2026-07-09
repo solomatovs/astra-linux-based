@@ -1,1 +1,4 @@
 artifacts
+nginx.conf
+krb5.conf
+*.keytab

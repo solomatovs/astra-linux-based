@@ -11,7 +11,7 @@ FROM ${PYTHON_IMAGE} AS python
 FROM ${GCC_IMAGE} AS gcc
 FROM ${LLVM_IMAGE} AS llvm
 FROM ${BUILD_IMAGE} AS base
-FROM base AS dist
+FROM base AS builder
 
 ARG CLICKHOUSE_VERSION
 ARG NINJA_VERSION
@@ -40,7 +40,7 @@ RUN printf '%s\n'           \
 
 RUN apt-get update                                  \
     && apt-get install -y --no-install-recommends   \
-        nasm yasm curl                              \
+        nasm yasm curl git                          \
     && apt-get clean                                \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
@@ -57,6 +57,8 @@ RUN cd /tmp \
 # clickhouse
 RUN cd /tmp \
     && tar -xf src/clickhouse-${CLICKHOUSE_VERSION}.tar.gz \
+    # git init: кодогенерация лицензий зовёт git rev-parse (в tarball нет .git)
+    && git -C ClickHouse-${CLICKHOUSE_VERSION} init -q \
     # выбор компилятора: clang (по умолчанию) или gcc
     && if [ "${CLICKHOUSE_CC}" = "gcc" ]; then export CC=gcc CXX=g++; else export CC=clang CXX=clang++; fi \
     && cmake -G Ninja -S ClickHouse-${CLICKHOUSE_VERSION} -B build \
@@ -69,12 +71,19 @@ RUN cd /tmp \
         -DENABLE_RUST=OFF                               \
         -DENABLE_UTILS=OFF                              \
         -DENABLE_EMBEDDED_COMPILER=OFF                  \
+        -DENABLE_CCACHE=0                               \
         -DCOMPILER_CACHE=disabled                       \
         -DCMAKE_INSTALL_PREFIX=/usr/local               \
     && cmake --build build -j"$(nproc)"                 \
     && DESTDIR=${CLICKHOUSE_PATH} cmake --install build \
     && cd / \
     && rm -rf /tmp/*
+
+
+# dist: только собранный /opt/clickhouse без тулчейна — компактный «дистрибутив»
+FROM ${RUNTIME_IMAGE} AS dist
+ARG CLICKHOUSE_PATH=/opt/clickhouse
+COPY --from=builder ${CLICKHOUSE_PATH} ${CLICKHOUSE_PATH}
 
 
 FROM ${RUNTIME_IMAGE} AS runtime

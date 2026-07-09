@@ -1,0 +1,62 @@
+# Пример: SPNEGO/Kerberos SSO + группы из PAC -> роль бэкенда (на примере Grafana).
+# Требует: /etc/krb5.conf (см. krb5.conf.example) и keytab HTTP/<host> из AD.
+#
+# Как это работает:
+#   браузер (доменный) -> получает Kerberos-билет на HTTP/grafana.example.com
+#   -> nginx проверяет по keytab, достаёт SID групп из PAC тикета
+#   -> auth_gss_group_sid мапит SID -> имя, map мапит имя -> роль
+#   -> заголовки X-WEBAUTH-USER/ROLE уходят в бэкенд (Grafana auth.proxy).
+
+# --- словарь SID -> имя группы (http-контекст) ---
+# SID группы = <SID домена>-<RID>. Узнать: wbinfo -n 'DOMAIN\group' на DC.
+auth_gss_group_sid grafana-admins  S-1-5-21-1111111111-2222222222-3333333333-1104;
+auth_gss_group_sid grafana-editors S-1-5-21-1111111111-2222222222-3333333333-1103;
+auth_gss_group_sid grafana-viewers S-1-5-21-1111111111-2222222222-3333333333-1109;
+
+# --- имя группы -> роль (первое совпадение выигрывает: Admin > Editor > Viewer) ---
+map $spnego_groups $grafana_role {
+    default                   Viewer;
+    "~(^|,)grafana-admins(,|$)"  Admin;
+    "~(^|,)grafana-editors(,|$)" Editor;
+}
+
+server {
+    listen      443 ssl;
+    server_name grafana.example.com;
+
+    # ssl_certificate ...; ssl_certificate_key ...;
+
+    location / {
+        # --- Kerberos SSO ---
+        auth_gss on;
+        auth_gss_keytab /etc/nginx/grafana.keytab;
+        auth_gss_realm  EXAMPLE.COM;
+        auth_gss_service_name HTTP/grafana.example.com;
+        # $remote_user без @REALM (Grafana ждёт голый логин)
+        # auth_gss_map_to_local on;
+
+        # --- ограничение доступа по группам (опционально) ---
+        # пускать только членов этих AD-групп (OR), иначе 403:
+        # auth_gss_require_group grafana-admins grafana-editors grafana-viewers;
+        # или: 403, если ни один SID не замаплен в auth_gss_group_sid:
+        # auth_gss_require_mapped_group on;
+
+        # --- заголовки для бэкенда (перезаписывают клиентские -> нет подмены) ---
+        proxy_set_header X-WEBAUTH-USER   $remote_user;
+        proxy_set_header X-WEBAUTH-ROLE   $grafana_role;
+        # сырые SID и имена групп, если нужны бэкенду:
+        proxy_set_header X-Spnego-Sids    $spnego_sids;
+        proxy_set_header X-Spnego-Groups  $spnego_groups;
+
+        proxy_pass http://grafana:3000;
+    }
+}
+
+# Соответствующий grafana.ini:
+#   [auth.proxy]
+#   enabled = true
+#   header_name = X-WEBAUTH-USER
+#   headers = Role:X-WEBAUTH-ROLE
+#   whitelist = <IP nginx>       # доверять заголовкам только от nginx
+# Примечание: Team Sync через X-WEBAUTH-GROUPS — только Grafana Enterprise;
+# в OSS доступом управляем через роль (X-WEBAUTH-ROLE).

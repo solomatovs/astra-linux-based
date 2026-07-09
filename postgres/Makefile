@@ -17,14 +17,16 @@ BASE_URL			?= https://ftp.postgresql.org/pub/source
 # выполнять ли сброс кэша: docker build --no-cache
 NO_CACHE			?= 0
 
-# apt-deps (dev) для сборки сервера и contrib
+# apt-deps (dev)
 APT_DEPS			?= pkg-config bison flex file bzip2			\
 					libssl-dev libreadline-dev libncurses5-dev	\
 					zlib1g-dev libxml2-dev libxslt1-dev			\
-					libicu-dev uuid-dev
-# apt-deps (runtime) — .so, против которых слинкован сервер
-RUNTIME_APT_DEPS	?= libssl1.1 libreadline7 libncurses5 zlib1g	\
-					libxml2 libxslt1.1 libicu63 libuuid1			\
+					libicu-dev uuid-dev							\
+					libperl-dev tcl-dev python3.7-dev
+# apt-deps (runtime)
+RUNTIME_APT_DEPS	?= libssl1.1 libreadline7 libncurses5 zlib1g\
+					libxml2 libxslt1.1 libicu63 libuuid1		\
+					perl libtcl8.6 libpython3.7					\
 					ca-certificates tzdata
 
 GLIBC_IMAGE			?= dmp/glibc:2.28
@@ -54,12 +56,13 @@ IMAGE			:= dmp/postgres
 NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
 
-# helper: флаги ./configure по версии (openssl c 9.5, icu c 10, uuid c 9.4)
+# helper: флаги ./configure по версии
+# openssl c 9.5, icu c 10, uuid c 9.4; perl/tcl всегда, python (python3.7) c 10
 pg_extra = $(shell v='$(1)'; maj=$${v%%.*}; min=$$(echo "$$v" | cut -d. -f2);	\
-	e="--with-libxml --with-readline --with-zlib";								\
+	e="--with-libxml --with-readline --with-zlib --with-perl --with-tcl";		\
 	if [ "$$maj" -ge 10 ] || { [ "$$maj" -eq 9 ] && [ "$$min" -ge 5 ]; }; then	\
 		e="$$e --with-openssl"; fi;												\
-	if [ "$$maj" -ge 10 ]; then e="$$e --with-icu"; fi;							\
+	if [ "$$maj" -ge 10 ]; then e="$$e --with-icu --with-python"; fi;			\
 	if [ "$$maj" -ge 10 ] || { [ "$$maj" -eq 9 ] && [ "$$min" -ge 4 ]; }; then	\
 		e="$$e --with-uuid=e2fs"; fi;											\
 	echo "$$e")

@@ -1,0 +1,22 @@
+# /etc/krb5.conf — конфигурация Kerberos для SPNEGO (auth_gss) против AD.
+# Скопируйте в krb5.conf и подставьте свой домен. Keytab HTTP/<host> монтируется
+# отдельно (auth_gss_keytab в nginx.conf), напр. /etc/nginx/http.keytab.
+[libdefaults]
+    default_realm = EXAMPLE.COM
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+    rdns = false
+    ticket_lifetime = 24h
+    forwardable = true
+
+[realms]
+    EXAMPLE.COM = {
+        kdc = dc1.example.com
+        kdc = dc2.example.com
+        admin_server = dc1.example.com
+        default_domain = example.com
+    }
+
+[domain_realm]
+    .example.com = EXAMPLE.COM
+    example.com = EXAMPLE.COM

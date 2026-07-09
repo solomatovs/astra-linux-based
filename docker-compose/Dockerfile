@@ -15,14 +15,14 @@ RUN set -eux;                                       \
     cd /tmp;                                        \
     tar -xf compose.tar.gz;                         \
     cd compose-${COMPOSE_VERSION};                  \
-    export GOTOOLCHAIN=local GOFLAGS=-mod=vendor GOPROXY=off GO111MODULE=on CGO_ENABLED=0; \
-    mkdir -p ${COMPOSE_PATH}/usr/local/bin ${COMPOSE_PATH}/usr/local/lib/docker/cli-plugins; \
+    export GOTOOLCHAIN=local GOFLAGS=-mod=vendor GOPROXY=off GO111MODULE=on CGO_ENABLED=0;      \
+    mkdir -p ${COMPOSE_PATH}/usr/local/bin ${COMPOSE_PATH}/usr/local/lib/docker/cli-plugins;    \
     go build -trimpath                              \
         -ldflags "-s -w -X ${COMPOSE_PKG}/internal.Version=v${COMPOSE_VERSION}" \
-        -o ${COMPOSE_PATH}/usr/local/bin/docker-compose ./cmd; \
-    ln -s /usr/local/bin/docker-compose             \
-        ${COMPOSE_PATH}/usr/local/lib/docker/cli-plugins/docker-compose; \
-    ${COMPOSE_PATH}/usr/local/bin/docker-compose version; \
+        -o ${COMPOSE_PATH}/usr/local/bin/docker-compose ./cmd;                  \
+    ln -s /usr/local/bin/docker-compose                                         \
+        ${COMPOSE_PATH}/usr/local/lib/docker/cli-plugins/docker-compose;        \
+    ${COMPOSE_PATH}/usr/local/bin/docker-compose version;                       \
     cd / && rm -rf /tmp/*
 
 

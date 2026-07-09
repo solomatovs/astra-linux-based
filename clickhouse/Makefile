@@ -167,17 +167,13 @@ test-%: build-%
 	@current=$(*)
 	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE):$$current -euc '\
 		echo "== version ==";					\
-		clickhouse --version; 					\
-		echo "== версии программ =="; 			\
-		clickhouse server --version | head -1;	\
-		clickhouse client --version | head -1;	\
-		clickhouse local  --version | head -1;	\
+		clickhouse local --version;				\
 		echo "== наличие компонентов =="; 		\
 		for t in server client local keeper compressor; do 	\
 			clickhouse $$t --help >/dev/null 2>&1 && echo "  ok   clickhouse-$$t" || echo "  MISS clickhouse-$$t"; 	\
 		done;									\
 		echo "== smoke ==";						\
-		clickhouse local --queries-file /test/smoke.sql'
+		clickhouse local --query "$$(cat /test/smoke.sql)"'
 
 
 .PHONY: clean

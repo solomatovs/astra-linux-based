@@ -27,11 +27,14 @@ RUN apt-get update                  \
         /var/lib/apt/lists/*        \
         /var/cache/apt/archives/*
 
-# PostgreSQL: ядро сервера + contrib (без docs)
+# PostgreSQL: ядро сервера + contrib + pl-языки (без docs)
+# libieee.a — пустая заглушка: tclConfig.sh в Astra тянет устаревшую -lieee (нет в glibc >=2.23)
 COPY artifacts/src/postgresql-${PG_VERSION}.tar.bz2 /tmp/pg.tar.bz2
 RUN cd /tmp                                                          \
     && tar -xf pg.tar.bz2                                            \
     && cd postgresql-${PG_VERSION}                                   \
+    && export PYTHON=/usr/bin/python3.7                              \
+    && ar rcs /usr/lib/x86_64-linux-gnu/libieee.a                   \
     && ./configure --prefix=${PG_PREFIX} ${PG_EXTRA_CONF}            \
     && make -j"$(nproc)"                                             \
     && make -j"$(nproc)" -C contrib                                  \

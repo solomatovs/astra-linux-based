@@ -1,0 +1,42 @@
+# Пример: аутентификация/авторизация через AD по LDAP (модуль nginx-auth-ldap).
+# В отличие от SPNEGO (SSO без пароля), здесь браузер спрашивает логин/пароль
+# (HTTP Basic), а nginx проверяет их bind'ом в AD и членство в группах.
+# TLS к AD выполняет сам nginx (ldaps:// через ngx_ssl), поэтому libldap без tls.
+
+# ldap_server объявляется в http-контексте (файл включается внутри http{}).
+# ВАЖНО: хост из url резолвится на СТАРТЕ nginx (и при nginx -t) — DNS-имя DC
+# должно резолвиться, иначе используйте IP.
+ldap_server ad {
+    # база поиска пользователя + фильтр (AD Global Catalog — порт 3268/636)
+    url "ldaps://dc1.example.com:636/DC=example,DC=com?sAMAccountName?sub?(objectClass=person)";
+
+    # сервисная учётка для bind (поиск пользователя)
+    binddn "CN=svc-ldap,OU=Service,DC=example,DC=com";
+    binddn_passwd "CHANGE_ME";
+
+    # членство в группах
+    group_attribute member;
+    group_attribute_is_dn on;
+    satisfy any;              # any = хотя бы одна require; all = все
+
+    # разрешённые группы (DN)
+    require group "CN=grafana-admins,OU=Groups,DC=example,DC=com";
+    require group "CN=grafana-editors,OU=Groups,DC=example,DC=com";
+    # либо любой валидный пользователь домена:
+    # require valid_user;
+
+    # доверенный CA для ldaps (если сертификат AD не в системном хранилище):
+    # ssl_ca_file /etc/nginx/ad-ca.crt;
+}
+
+server {
+    listen      443 ssl;
+    server_name wiki.example.com;
+
+    location / {
+        auth_ldap "Restricted (AD login)";
+        auth_ldap_servers ad;
+
+        proxy_pass http://wiki:8080;
+    }
+}
