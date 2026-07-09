@@ -1971,24 +1971,26 @@ ngx_http_auth_spnego_collect_groups(ngx_http_request_t *r,
         return;
     }
 
-    spnego_debug2("PAC logon-info: %uz bytes, authenticated=%d",
-                  (size_t) value.length, authenticated);
+    spnego_debug3("PAC: user=\"%V\" logon-info=%uz bytes authenticated=%d",
+                  &r->headers_in.user, (size_t) value.length, authenticated);
 
     if (ngx_spnego_pac_extract_sids(value.value, value.length,
                                     ngx_http_auth_spnego_pac_cb, &coll) != 0) {
-        spnego_log_error("PAC parse failed (%uz bytes)", (size_t) value.length);
+        spnego_log_error("PAC parse failed for user \"%V\" (%uz bytes)",
+                         &r->headers_in.user, (size_t) value.length);
     }
     gss_release_buffer(&minor, &value);
     if (dvalue.length)
         gss_release_buffer(&minor, &dvalue);
 
-    spnego_debug1("PAC: extracted %ui SID(s)", (ngx_uint_t) sidarr->nelts);
+    spnego_debug2("PAC: user=\"%V\" got %ui SID(s) from ticket:",
+                  &r->headers_in.user, (ngx_uint_t) sidarr->nelts);
 #if (NGX_DEBUG)
     {
         ngx_str_t *dbg = sidarr->elts;
         ngx_uint_t di;
         for (di = 0; di < sidarr->nelts; di++)
-            spnego_debug1("PAC SID: %V", &dbg[di]);
+            spnego_debug2("PAC:   SID[%ui] = %V", di, &dbg[di]);
     }
 #endif
 
@@ -1997,11 +1999,12 @@ ngx_http_auth_spnego_collect_groups(ngx_http_request_t *r,
 
     /* $spnego_sids — сырые SID через запятую */
     ngx_http_auth_spnego_join_csv(r, sidarr, &ctx->sids);
-    spnego_debug1("$spnego_sids = %V", &ctx->sids);
+    spnego_debug1("PAC: $spnego_sids = %V", &ctx->sids);
 
     /* $spnego_groups — отмапленные имена (уникальные), если задан словарь */
     if (alcf->group_sids == NGX_CONF_UNSET_PTR || alcf->group_sids == NULL) {
-        spnego_debug0("no auth_gss_group_sid map configured; $spnego_groups empty");
+        spnego_debug0("PAC: no auth_gss_group_sid map configured; "
+                      "$spnego_groups empty");
         return;
     }
 
@@ -2011,9 +2014,12 @@ ngx_http_auth_spnego_collect_groups(ngx_http_request_t *r,
     sd = sidarr->elts;
     gs = alcf->group_sids->elts;
     for (i = 0; i < sidarr->nelts; i++) {
+        ngx_uint_t matched = 0;
         for (k = 0; k < alcf->group_sids->nelts; k++) {
             if (sd[i].len == gs[k].sid.len
                 && ngx_strncmp(sd[i].data, gs[k].sid.data, sd[i].len) == 0) {
+                matched = 1;
+                spnego_debug2("PAC: map %V -> group \"%V\"", &sd[i], &gs[k].name);
                 if (!ngx_http_auth_spnego_arr_has(names, &gs[k].name)) {
                     ngx_str_t *nm = ngx_array_push(names);
                     if (nm == NULL)
@@ -2022,9 +2028,13 @@ ngx_http_auth_spnego_collect_groups(ngx_http_request_t *r,
                 }
             }
         }
+        if (!matched) {
+            spnego_debug1("PAC: map %V -> (no group)", &sd[i]);
+        }
     }
     ngx_http_auth_spnego_join_csv(r, names, &ctx->groups);
-    spnego_debug1("$spnego_groups = %V", &ctx->groups);
+    spnego_debug2("PAC: user=\"%V\" $spnego_groups = %V",
+                  &r->headers_in.user, &ctx->groups);
 }
 
 /* авторизация по группам: 403, если требования не выполнены */
@@ -2038,7 +2048,8 @@ ngx_http_auth_spnego_authorize_groups(ngx_http_request_t *r,
 
     /* require_mapped_group: нужна хотя бы одна замапленная группа */
     if (alcf->require_mapped_group == 1 && ctx->groups.len == 0) {
-        spnego_debug0("require_mapped_group: no mapped groups -> 403");
+        spnego_debug1("require_mapped_group: user \"%V\" has no mapped groups "
+                      "-> 403", &r->headers_in.user);
         return NGX_HTTP_FORBIDDEN;
     }
 
@@ -2067,12 +2078,13 @@ ngx_http_auth_spnego_authorize_groups(ngx_http_request_t *r,
     req = alcf->require_groups->elts;
     for (i = 0; i < alcf->require_groups->nelts; i++) {
         if (usergroups && ngx_http_auth_spnego_arr_has(usergroups, &req[i])) {
-            spnego_debug1("require_group: matched \"%V\" -> allow", &req[i]);
+            spnego_debug2("require_group: user \"%V\" matched \"%V\" -> allow",
+                          &r->headers_in.user, &req[i]);
             return NGX_OK;
         }
     }
-    spnego_debug1("require_group: user groups [%V] in none of required -> 403",
-                  &ctx->groups);
+    spnego_debug2("require_group: user \"%V\" groups [%V] in none of "
+                  "required -> 403", &r->headers_in.user, &ctx->groups);
     return NGX_HTTP_FORBIDDEN;
 }
 
