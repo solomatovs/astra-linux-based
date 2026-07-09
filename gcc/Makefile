@@ -95,7 +95,7 @@ sources-%:
 		"$(BASE_URL)/binutils/binutils-$$6.tar.xz" 		\
 		"$(BASE_URL)/make/make-$$7.tar.gz" 				\
 		"$(BASE_URL)/gcc/gcc-$$current/gcc-$$current.tar.xz"	\
-	; do [ -f "$(ARTIFACTS)/src/$${spec##*/}" ] || curl -v -O --output-dir "$(ARTIFACTS)/src" "$$spec" ;
+	; do [ -f "$(ARTIFACTS)/src/$${spec##*/}" ] || curl -v -o "$(ARTIFACTS)/src/$${spec##*/}" "$$spec" ;
 	done
 
 

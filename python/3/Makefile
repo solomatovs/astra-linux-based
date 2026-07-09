@@ -89,7 +89,7 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	[ -f "$(ARTIFACTS)/src/Python-$$current.tar.xz" ] || curl -v -O --output-dir "$(ARTIFACTS)/src" "$(BASE_URL)/$$current/Python-$$current.tar.xz"
+	[ -f "$(ARTIFACTS)/src/Python-$$current.tar.xz" ] || curl -v -o "$(ARTIFACTS)/src/Python-$$current.tar.xz" "$(BASE_URL)/$$current/Python-$$current.tar.xz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

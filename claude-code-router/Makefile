@@ -81,7 +81,7 @@ sources-%:
 	mkdir -p $(ARTIFACTS)/src
 	for spec in $$v										\
 		"$(BASE_URL)/claude-code-router-$$current.tgz"	\
-	; do [ -f "$(ARTIFACTS)/src/$${spec##*/}" ] || curl -v -O --output-dir "$(ARTIFACTS)/src" "$$spec" ;
+	; do [ -f "$(ARTIFACTS)/src/$${spec##*/}" ] || curl -v -o "$(ARTIFACTS)/src/$${spec##*/}" "$$spec" ;
 	done
 
 
