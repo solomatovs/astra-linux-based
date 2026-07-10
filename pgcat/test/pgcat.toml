@@ -1,0 +1,14 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+admin_username = "admin"
+admin_password = "admin"
+
+[pools.postgres.users.0]
+username = "postgres"
+password = "postgres"
+pool_size = 5
+
+[pools.postgres.shards.0]
+servers = [["127.0.0.1", 5432, "primary"]]
+database = "postgres"
