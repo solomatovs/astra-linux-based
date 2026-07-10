@@ -22,20 +22,20 @@ ZLIB_URL			?= https://github.com/madler/zlib/releases/download
 OPENSSL_URL			?= https://github.com/openssl/openssl/releases/download
 # docker build --no-cache
 NO_CACHE			?= 0
-# apt-deps (build): perl — OpenSSL Configure, bison/flex — krb5, file — libtool (openldap)
+# apt-deps (build)
 APT_DEPS			?= perl bison flex file
 
-# --- модули kerberos/AD и их зависимости (одинаковы для всех версий nginx) ---
-# MIT krb5 (SPNEGO/Kerberos), как в samba-ad
+# krb5
 KRB5_VERSION		?= 1.21.3
 KRB5_SERIES			?= 1.21
 KRB5_URL			?= https://kerberos.org/dist/krb5
 # OpenLDAP client (auth_ldap)
 OPENLDAP_VERSION	?= 2.6.9
 OPENLDAP_URL		?= https://www.openldap.org/software/download/OpenLDAP/openldap-release
-# spnego-http-auth-nginx-module (auth_gss) — вендоренный форк в подпапке
-# spnego-http-auth-nginx-module/, собирается локально (не скачивается)
-# nginx-auth-ldap (auth_ldap) — без релизов, тянем ветку
+# njs (ngx_stream_js_module)
+NJS_VERSION			?= 0.9.0
+NJS_URL				?= https://github.com/nginx/njs/archive/refs/tags
+# nginx-auth-ldap (auth_ldap)
 LDAP_MODULE_REF		?= master
 LDAP_MODULE_URL		?= https://github.com/kvspb/nginx-auth-ldap/archive/refs/heads
 
@@ -43,7 +43,6 @@ GLIBC_IMAGE			?= dmp/glibc:2.28
 GCC_IMAGE			?= dmp/gcc:8.5.0-dist
 
 # зависимости для сборки разных версии
-# http3: 0 | 1 — модуль http_v3 (QUIC) доступен только с nginx >= 1.25
 # версия           runtime_image	build_image		pcre2	zlib	openssl		http3
 DEPS_1.24.0		:= $(GLIBC_IMAGE)	$(GCC_IMAGE)	10.45	1.3.1	3.0.16		0
 DEPS_1.26.3		:= $(GLIBC_IMAGE)	$(GCC_IMAGE)	10.45	1.3.1	3.0.16		1
@@ -70,10 +69,6 @@ help:
 	@echo "  make test       проверить образ: nginx -V, -t, модули, запуск и HTTP-ответ"
 	@echo ""
 	@echo "  Цепочка: $(VERSION_CHAIN)"
-	@echo "  Каждая версия собирается тулчейном dmp/gcc, рантайм — чистый dmp/glibc."
-	@echo "  PCRE2/zlib/OpenSSL линкуются СТАТИЧЕСКИ — runtime-.so не требуются."
-	@echo "  Модули kerberos/AD: spnego (auth_gss) + nginx-auth-ldap (auth_ldap);"
-	@echo "  krb5/openldap собираются из исходников (как в samba-ad), .so копируются в рантайм."
 	@echo "  Каждый образ тегируется полной и короткой версией (напр. 1.28.0 и 1.28)."
 	@echo "  Версии зависимостей и флаг http3 — в DEPS_<версия> (http_v3 только nginx >= 1.25)."
 	@echo "  Свой конфиг: nginx.conf.example -> nginx.conf."
@@ -128,6 +123,7 @@ sources-%:
 	[ -f "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" "$(KRB5_URL)/$(KRB5_SERIES)/krb5-$(KRB5_VERSION).tar.gz"
 	[ -f "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" ] || curl -v -L -o "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" "$(OPENLDAP_URL)/openldap-$(OPENLDAP_VERSION).tgz"
 	[ -f "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" "$(LDAP_MODULE_URL)/$(LDAP_MODULE_REF).tar.gz"
+	[ -f "$(ARTIFACTS)/src/njs-$(NJS_VERSION).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/njs-$(NJS_VERSION).tar.gz" "$(NJS_URL)/$(NJS_VERSION).tar.gz"
 
 
 # docker build --target dist - дистрибутив со скомпилированными исходниками (без установки в систему)
@@ -155,6 +151,7 @@ dist-%: sources-%
 		--build-arg KRB5_VERSION=$(KRB5_VERSION) 			\
 		--build-arg OPENLDAP_VERSION=$(OPENLDAP_VERSION) 	\
 		--build-arg LDAP_MODULE_REF=$(LDAP_MODULE_REF) 		\
+		--build-arg NJS_VERSION=$(NJS_VERSION) 				\
 		--build-arg APT_DEPS="$(APT_DEPS)" 		\
 		--tag $(IMAGE):$$current-dist 			\
 		--tag $(IMAGE):$$short-dist 			\
@@ -186,6 +183,7 @@ build-%: dist-%
 		--build-arg KRB5_VERSION=$(KRB5_VERSION) 			\
 		--build-arg OPENLDAP_VERSION=$(OPENLDAP_VERSION) 	\
 		--build-arg LDAP_MODULE_REF=$(LDAP_MODULE_REF) 		\
+		--build-arg NJS_VERSION=$(NJS_VERSION) 				\
 		--build-arg APT_DEPS="$(APT_DEPS)" 			\
 		--tag $(IMAGE):$$current 					\
 		--tag $(IMAGE):$$short 						\
@@ -228,7 +226,8 @@ clean-%:
 		"$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" \
 		"$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" \
 		"$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" \
-		"$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz"
+		"$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" \
+		"$(ARTIFACTS)/src/njs-$(NJS_VERSION).tar.gz"
 
 
 .PHONY: all

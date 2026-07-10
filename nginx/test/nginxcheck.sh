@@ -16,10 +16,13 @@ done
 # http_v3 есть не во всех версиях (nginx >= 1.25)
 if echo "$V" | grep -q -- http_v3_module; then echo "OK  http_v3_module"; else echo "n/a http_v3_module"; fi
 
-# директивы kerberos/ldap должны приниматься конфигом (модули реально слинкованы)
+# директивы kerberos/ldap должны приниматься конфигом.
+# Модули теперь ДИНАМИЧЕСКИЕ -> грузим их load_module перед использованием директив.
 echo "== 1b. auth directives =="
 adir=/tmp/authtest; mkdir -p "$adir"
 cat > "$adir/nginx.conf" <<CONF
+load_module modules/ngx_http_auth_spnego_module.so;
+load_module modules/ngx_http_auth_ldap_module.so;
 daemon off;
 pid $adir/nginx.pid;
 events { worker_connections 64; }
@@ -60,12 +63,13 @@ http {
     }
 }
 CONF
-# нет keytab/AD, поэтому -t может не пройти; важен лишь признак «модуль не слинкован»
+# нет keytab/AD, поэтому -t может не пройти; важны признаки «модуль не загружен» / «директива не распознана»
 out="$(nginx -c "$adir/nginx.conf" -t 2>&1 || true)"
-if echo "$out" | grep -q 'unknown directive'; then
-    echo "FAIL: директива не распознана (модуль не слинкован):"; echo "$out" | grep 'unknown directive'; exit 1
+if echo "$out" | grep -qiE 'unknown directive|dlopen|not binary compatible|cannot load module'; then
+    echo "FAIL: модуль не загружен / директива не распознана:"
+    echo "$out" | grep -iE 'unknown directive|dlopen|not binary compatible|cannot load module'; exit 1
 fi
-echo "OK  auth_gss / auth_ldap directives parsed"
+echo "OK  auth_gss / auth_ldap модули загружены + директивы приняты"
 
 # HTTP-запрос через bash /dev/tcp (в рантайме нет curl)
 http_get() {

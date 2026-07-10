@@ -27,6 +27,22 @@ RUN apt-get update                  \
         /var/lib/apt/lists/*        \
         /var/cache/apt/archives/*
 
+# MIT krb5 (для GSSAPI/Kerberos в postgres) — как в samba-ad, shared, в /usr/local.
+# --disable-pkinit: единственный компонент krb5, которому нужен OpenSSL (не тянем второй).
+ARG KRB5_VERSION
+COPY artifacts/src/krb5-${KRB5_VERSION}.tar.gz /tmp/krb5.tar.gz
+RUN cd /tmp                             \
+    && tar xf krb5.tar.gz               \
+    && cd krb5-${KRB5_VERSION}/src      \
+    && ./configure                      \
+        --prefix=/usr/local             \
+        --disable-rpath                 \
+        --disable-pkinit                \
+    && make -j"$(nproc)"                \
+    && make install                     \
+    && ldconfig                         \
+    && cd / && rm -rf /tmp/*
+
 # PostgreSQL: ядро сервера + contrib + pl-языки (без docs)
 # libieee.a — пустая заглушка: tclConfig.sh в Astra тянет устаревшую -lieee (нет в glibc >=2.23)
 COPY artifacts/src/postgresql-${PG_VERSION}.tar.bz2 /tmp/pg.tar.bz2
@@ -35,11 +51,19 @@ RUN cd /tmp                                                          \
     && cd postgresql-${PG_VERSION}                                   \
     && export PYTHON=/usr/bin/python3.7                              \
     && ar rcs /usr/lib/x86_64-linux-gnu/libieee.a                   \
-    && ./configure --prefix=${PG_PREFIX} ${PG_EXTRA_CONF}            \
+    && CPPFLAGS="-I/usr/local/include"                               \
+       LDFLAGS="-L/usr/local/lib -Wl,-rpath,/usr/local/lib"          \
+       ./configure --prefix=${PG_PREFIX} ${PG_EXTRA_CONF}            \
     && make -j"$(nproc)"                                             \
     && make -j"$(nproc)" -C contrib                                  \
     && make install         DESTDIR=${PG_PATH}                       \
     && make -C contrib install DESTDIR=${PG_PATH}                    \
+    && mkdir -p ${PG_PATH}/usr/local/lib                             \
+    && for p in libgssapi_krb5 libkrb5 libk5crypto libcom_err        \
+                libkrb5support libverto; do                          \
+         cp -a /usr/local/lib/$p.so* ${PG_PATH}/usr/local/lib/ 2>/dev/null || true; \
+       done                                                          \
+    && cp -a /usr/local/lib/krb5 ${PG_PATH}/usr/local/lib/ 2>/dev/null || true \
     && cd / && rm -rf /tmp/*
 
 
@@ -59,7 +83,7 @@ RUN if [ -n "${RUNTIME_APT_DEPS}" ]; then                                   \
 
 # сервер и его библиотеки из dist-стадии
 COPY --from=dist ${PG_PATH} /
-RUN printf '%s\n' "${PG_PREFIX}/lib" > /etc/ld.so.conf.d/postgres.conf \
+RUN printf '%s\n%s\n' "${PG_PREFIX}/lib" "/usr/local/lib" > /etc/ld.so.conf.d/postgres.conf \
     && ldconfig
 
 # пользователь postgres (сервер не стартует от root)

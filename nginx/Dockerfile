@@ -7,14 +7,14 @@ FROM ${BUILD_IMAGE} AS dist
 ARG APT_DEPS
 ARG NGINX_PATH=/opt/nginx
 
-# gcc-тулчейн из slim gcc:*-dist лежит в /opt/gcc — переносим в /usr/local
+# gcc
 RUN cp -a /opt/gcc/usr/local/. /usr/local/                          \
     && ln -sf gcc /usr/local/bin/cc                                 \
     && ln -sf g++ /usr/local/bin/c++                                \
     && printf '%s\n' /usr/local/lib64 /usr/local/lib > /etc/ld.so.conf.d/gcc-local.conf \
     && ldconfig
 
-# build-toolchain (perl — OpenSSL Configure, bison/flex — krb5, file — libtool/openldap)
+# build-toolchain
 RUN if [ -n "${APT_DEPS}" ]; then                                   \
         apt-get update                                              \
         && apt-get install -y --no-install-recommends ${APT_DEPS}   \
@@ -24,9 +24,7 @@ RUN if [ -n "${APT_DEPS}" ]; then                                   \
             /var/cache/apt/archives/*;                              \
     fi
 
-# MIT krb5 (для модуля SPNEGO/Kerberos) — shared, в /usr/local (рецепт из samba-ad).
-# --disable-pkinit: единственный компонент krb5, которому нужен OpenSSL; без него
-# krb5 не тянет -lcrypto (сохраняем один OpenSSL, статический внутри nginx).
+# krb5
 ARG KRB5_VERSION
 COPY artifacts/src/krb5-${KRB5_VERSION}.tar.gz /tmp/krb5.tar.gz
 RUN cd /tmp                             \
@@ -41,9 +39,7 @@ RUN cd /tmp                             \
     && ldconfig                         \
     && cd / && rm -rf /tmp/*
 
-# OpenLDAP client (для модуля auth_ldap) — только libldap/liblber, shared.
-# TLS модуль делает через SSL-слой nginx, поэтому libldap без tls/sasl.
-# Собираем только include+libraries (без клиентов и man-доков -> без groff/soelim).
+# OpenLDAP client
 ARG OPENLDAP_VERSION
 COPY artifacts/src/openldap-${OPENLDAP_VERSION}.tgz /tmp/openldap.tgz
 RUN cd /tmp                             \
@@ -65,13 +61,10 @@ ARG NGINX_VERSION
 ARG PCRE2_VERSION
 ARG ZLIB_VERSION
 ARG OPENSSL_VERSION
-# NGINX_HTTP3: 0 | 1 — http_v3 (QUIC) доступен только с nginx >= 1.25
 ARG NGINX_HTTP3=0
 ARG LDAP_MODULE_REF
+ARG NJS_VERSION
 
-# spnego — локальный вендоренный форк (см. подпапку spnego-http-auth-nginx-module),
-# auth_ldap — из artifacts/src. Оба через --add-module, линкуются с krb5/openldap.
-# Собираем ДВА бинарника: /usr/sbin/nginx и /usr/sbin/nginx-debug (--with-debug).
 COPY artifacts/src/ /tmp/src/
 COPY spnego-http-auth-nginx-module/ /tmp/spnego-http-auth-nginx-module/
 RUN set -eux;                                                            \
@@ -81,9 +74,14 @@ RUN set -eux;                                                            \
     tar -xf src/openssl-${OPENSSL_VERSION}.tar.gz;                       \
     tar -xf src/nginx-${NGINX_VERSION}.tar.gz;                           \
     tar -xf src/nginx-auth-ldap-${LDAP_MODULE_REF}.tar.gz;               \
+    tar -xf src/njs-${NJS_VERSION}.tar.gz;                               \
+    ( cd njs-${NJS_VERSION}                                              \
+      && ./configure --cc=gcc --no-openssl --no-libxml2 --no-zlib        \
+                     --no-quickjs --no-pcre                              \
+      && make -j"$(nproc)" libnjs );                                     \
+    export NJS_OPENSSL=NO NJS_LIBXSLT=NO NJS_ZLIB=NO NJS_QUICKJS=NO;     \
     cd nginx-${NGINX_VERSION};                                           \
     if [ "${NGINX_HTTP3}" = "1" ]; then HTTP3="--with-http_v3_module"; else HTTP3=""; fi; \
-    # общий список опций configure (собираем один раз, используем дважды)  \
     set --                                                               \
         --prefix=/etc/nginx                                             \
         --sbin-path=/usr/sbin/nginx                                      \
@@ -132,16 +130,22 @@ RUN set -eux;                                                            \
         --with-stream_ssl_module                                         \
         --with-stream_realip_module                                      \
         --with-stream_ssl_preread_module                                 \
-        --add-module=/tmp/spnego-http-auth-nginx-module                 \
-        --add-module=/tmp/nginx-auth-ldap-${LDAP_MODULE_REF};           \
-    # 1) обычный бинарник -> /usr/sbin/nginx                             \
+        --add-dynamic-module=/tmp/spnego-http-auth-nginx-module          \
+        --add-dynamic-module=/tmp/nginx-auth-ldap-${LDAP_MODULE_REF}     \
+        --add-dynamic-module=/tmp/njs-${NJS_VERSION}/nginx;              \
+    # обычный бинарник /usr/sbin/nginx
     ./configure "$@";                                                    \
     make -j"$(nproc)";                                                   \
     make install DESTDIR=${NGINX_PATH};                                  \
-    # 2) debug-бинарник (--with-debug) -> /usr/sbin/nginx-debug          \
+    # динамические модули обычной сборки /etc/nginx/modules
+    mkdir -p ${NGINX_PATH}/etc/nginx/modules;                            \
+    cp objs/*.so ${NGINX_PATH}/etc/nginx/modules/;                       \
+    # 2) debug-бинарник (--with-debug) /usr/sbin/nginx-debug
     ./configure "$@" --with-debug;                                       \
     make -j"$(nproc)";                                                   \
     cp objs/nginx ${NGINX_PATH}/usr/sbin/nginx-debug;                    \
+    # debug-версии модулей -> *.so-debug
+    for so in objs/*.so; do cp "$so" "${NGINX_PATH}/etc/nginx/modules/$(basename "$so")-debug"; done; \
     mkdir -p ${NGINX_PATH}/var/cache/nginx ${NGINX_PATH}/var/log/nginx;  \
     strip ${NGINX_PATH}/usr/sbin/nginx ${NGINX_PATH}/usr/sbin/nginx-debug; \
     # рантайм-.so krb5/openldap кладём в DESTDIR (попадут в /usr/local/lib) \

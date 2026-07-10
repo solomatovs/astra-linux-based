@@ -14,6 +14,10 @@ VERSIONS			?= 9.0.23 9.1.24 9.2.24 9.3.25 9.4.26 9.5.25 9.6.24 \
 VERSION      		?= $(lastword $(VERSIONS))
 # базовый url адрес для скачивания исходников собираемых в Dockerfile
 BASE_URL			?= https://ftp.postgresql.org/pub/source
+# MIT krb5 (GSSAPI/Kerberos для --with-gssapi), тот же, что в nginx/samba-ad
+KRB5_VERSION		?= 1.21.3
+KRB5_SERIES			?= 1.21
+KRB5_URL			?= https://kerberos.org/dist/krb5
 # выполнять ли сброс кэша: docker build --no-cache
 NO_CACHE			?= 0
 
@@ -59,7 +63,7 @@ NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 # helper: флаги ./configure по версии
 # openssl c 9.5, icu c 10, uuid c 9.4; perl/tcl всегда, python (python3.7) c 10
 pg_extra = $(shell v='$(1)'; maj=$${v%%.*}; min=$$(echo "$$v" | cut -d. -f2);	\
-	e="--with-libxml --with-readline --with-zlib --with-perl --with-tcl";		\
+	e="--with-libxml --with-readline --with-zlib --with-perl --with-tcl --with-gssapi";	\
 	if [ "$$maj" -ge 10 ] || { [ "$$maj" -eq 9 ] && [ "$$min" -ge 5 ]; }; then	\
 		e="$$e --with-openssl"; fi;												\
 	if [ "$$maj" -ge 10 ]; then e="$$e --with-icu --with-python"; fi;			\
@@ -114,6 +118,8 @@ sources-%:
 	mkdir -p $(ARTIFACTS)/src
 	[ -f "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" ] || curl -v -L -o "$(ARTIFACTS)/src/postgresql-$$current.tar.bz2" \
 		"$(BASE_URL)/v$$current/postgresql-$$current.tar.bz2"
+	[ -f "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" \
+		"$(KRB5_URL)/$(KRB5_SERIES)/krb5-$(KRB5_VERSION).tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированным сервером (без установки в систему)
@@ -132,6 +138,7 @@ dist-%: sources-%
 		--build-arg BUILD_IMAGE=$$build 						\
 		--build-arg PG_VERSION=$$current 						\
 		--build-arg PG_EXTRA_CONF="$(call pg_extra,$*)" 		\
+		--build-arg KRB5_VERSION=$(KRB5_VERSION) 				\
 		--build-arg APT_DEPS="$(APT_DEPS)" 						\
 		--tag $(IMAGE):$$current-dist 							\
 		--tag $(IMAGE):$$short-dist 							\
@@ -154,6 +161,7 @@ build-%: dist-%
 		--build-arg BUILD_IMAGE=$$build 						\
 		--build-arg PG_VERSION=$$current 						\
 		--build-arg PG_EXTRA_CONF="$(call pg_extra,$*)" 		\
+		--build-arg KRB5_VERSION=$(KRB5_VERSION) 				\
 		--build-arg APT_DEPS="$(APT_DEPS)" 						\
 		--build-arg RUNTIME_APT_DEPS="$(RUNTIME_APT_DEPS)" 		\
 		--tag $(IMAGE):$$current 								\
