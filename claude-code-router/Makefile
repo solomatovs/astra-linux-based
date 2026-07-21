@@ -19,10 +19,19 @@ NO_CACHE			?= 0
 
 NODE_IMAGE			?= dmp/nodejs:22
 
+# Ассеты, которые апстрим-фронт тянет из интернета в рантайме. Вендорим их в образ,
+# а optimize-ui.js переписывает ссылки на локальные — UI работает без выхода наружу.
+# monaco-editor: редактор конфига, грузится AMD-загрузчиком с jsdelivr
+MONACO_URL			?= https://registry.npmjs.org/monaco-editor/-
+# список провайдеров (fetch при монтировании страницы)
+PROVIDERS_URL		?= https://pub-0dc3e1677e894f07bbea11b17a29e032.r2.dev/providers.json
+# nerd-шрифты для превью в настройках статусбара
+NERDFONTS_URL		?= https://www.nerdfonts.com/assets/css
+
 # зависимости для сборки разных версии
-# версия           runtime_image
-DEPS_1.0.73		:= $(NODE_IMAGE)
-DEPS_2.0.0		:= $(NODE_IMAGE)
+# версия           runtime_image	monaco (версия из URL в dist/index.html апстрима)
+DEPS_1.0.73		:= $(NODE_IMAGE)	0.52.2
+DEPS_2.0.0		:= $(NODE_IMAGE)	0.55.1
 
 # базовое название для образа
 IMAGE			:= dmp/claude-code-router
@@ -81,6 +90,9 @@ sources-%:
 	mkdir -p $(ARTIFACTS)/src
 	for spec in $$v										\
 		"$(BASE_URL)/claude-code-router-$$current.tgz"	\
+		"$(MONACO_URL)/monaco-editor-$$2.tgz"			\
+		"$(NERDFONTS_URL)/combo.css"					\
+		"$(PROVIDERS_URL)"								\
 	; do [ -f "$(ARTIFACTS)/src/$${spec##*/}" ] || curl -v -o "$(ARTIFACTS)/src/$${spec##*/}" "$$spec" ;
 	done
 
@@ -100,6 +112,7 @@ dist-%: sources-%
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist	\
 		--build-arg RUNTIME_IMAGE=$$1		\
 		--build-arg CCR_VERSION=$$current	\
+		--build-arg MONACO_VERSION=$$2		\
 		--tag $(IMAGE):$$current-dist		\
 		--progress plain $(BUILD_CONTEXT)
 
@@ -119,6 +132,7 @@ build-%: dist-%
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
 		--build-arg RUNTIME_IMAGE=$$1		\
 		--build-arg CCR_VERSION=$$current	\
+		--build-arg MONACO_VERSION=$$2		\
 		--tag $(IMAGE):$$current			\
 		--progress plain $(BUILD_CONTEXT)
 
