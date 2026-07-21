@@ -3,6 +3,9 @@ ARTIFACTS     	?= $(BASE_DIR)/artifacts
 BUILD_CONTEXT 	?= $(BASE_DIR)
 TEST_DIR		?= $(BASE_DIR)/test
 
+# путь, по которому дистрибутив лежит внутри -dist образа (GCC_PATH в Dockerfile)
+GCC_PATH		?= /opt/gcc
+
 
 .DEFAULT_GOAL := help
 
@@ -47,6 +50,7 @@ help:
 	@echo "  make all        собрать всё"
 	@echo "  make sources    скачать исходники для цепочки вплоть до $(VERSION)"
 	@echo "  make dist       собрать цепочку -dist образов одну за другой до $(VERSION)"
+	@echo "  make extract    достать дистрибутив ($(GCC_PATH)) из -dist образа в $(ARTIFACTS)/build/<версия>"
 	@echo "  make build      собрать образ $(IMAGE)"
 	@echo "  make test       проверить тулчейн: собрать и запустить test/hello.cpp в образе $(IMAGE)"
 	@echo ""
@@ -62,6 +66,7 @@ help:
 debug:
 	$(info BASE_DIR       = $(BASE_DIR))
 	$(info ARTIFACTS      = $(ARTIFACTS))
+	$(info GCC_PATH       = $(GCC_PATH))
 	$(info BUILD_CONTEXT  = $(BUILD_CONTEXT))
 	$(info TEST_DIR       = $(TEST_DIR))
 	$(info VERSION_CHAIN  = $(VERSION_CHAIN))
@@ -122,6 +127,26 @@ dist-%: sources-%
 		--build-arg MAKE_VERSION=$$7 		\
 		--tag $(IMAGE):$$current-dist 		\
 		--progress plain $(BUILD_CONTEXT)
+
+
+# извлечь скомпилированный дистрибутив (/opt/gcc) из -dist образа в artifacts/build/<версия>
+.PHONY: extract
+extract: extract-$(VERSION)
+
+.ONESHELL:
+extract-%: dist-%
+	@current=$(*)
+	set -e
+	img='$(IMAGE):'"$$current"'-dist'
+	dst='$(ARTIFACTS)/build/'"$$current"
+	# создаём временный контейнер из -dist образа (без запуска) и копируем из него дерево
+	cid=$$(docker create $$img)
+	trap 'docker rm -f $$cid >/dev/null 2>&1 || true' EXIT
+	rm -rf "$$dst"
+	mkdir -p "$$dst"
+	docker cp "$$cid:$(GCC_PATH)/." "$$dst/"
+	echo "extracted $$img:$(GCC_PATH) -> $$dst"
+	du -h --max-depth=1 "$$dst" || true
 
 
 # docker build - истоговый образ с установленным ПО (установка из дистрибутива)
