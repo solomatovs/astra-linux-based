@@ -27,12 +27,12 @@ COPY --from=python ${PYTHON_PATH}/ /
 RUN ldconfig
 
 # dev-зависимости samba (gcc/make/binutils/python уже в образах — их тут нет)
-RUN apt-get update      \
+RUN apt-get update              \
     && apt-get install -y --no-install-recommends \
-        ${APT_DEPS}     \
-    && apt-get clean    \
-    && rm -rf           \
-        /var/lib/apt/lists/* \
+        ${APT_DEPS}             \
+    && apt-get clean            \
+    && rm -rf                   \
+        /var/lib/apt/lists/*    \
         /var/cache/apt/archives/*
 
 # pip.conf (закрытый контур) + python-модули для samba
@@ -46,16 +46,16 @@ RUN if [ -f /tmp/pipconf/pip.conf ]; then \
 # nettle
 COPY artifacts/src/nettle-${NETTLE_VERSION}.tar.gz /tmp/nettle.tar.gz
 RUN cd /tmp \
-    && tar xf nettle.tar.gz \
-    && cd nettle-${NETTLE_VERSION} \
-    && ./configure          \
-        --prefix=/usr/local \
-        --disable-static    \
-        --enable-shared     \
-    && make -j"$(nproc)"    \
-    && make install         \
-    && ldconfig             \
-    && cd /                 \
+    && tar xf nettle.tar.gz         \
+    && cd nettle-${NETTLE_VERSION}  \
+    && ./configure                  \
+        --prefix=/usr/local         \
+        --disable-static            \
+        --enable-shared             \
+    && make -j"$(nproc)"            \
+    && make install                 \
+    && ldconfig                     \
+    && cd /                         \
     && rm -rf /tmp/*
 
 # GnuTLS
@@ -117,10 +117,10 @@ RUN cd /tmp                         \
 
 # Финальный rootfs
 RUN set -eux \
-    && mkdir -p ${ROOTFS}/usr/local     \
-    && cp -a ${SAMBA_PATH}/. ${ROOTFS}/ \
-    && rm -rf ${ROOTFS}/var/lock ${ROOTFS}/var/run \
-    && for d in lib lib64 bin sbin; do  \
+    && mkdir -p ${ROOTFS}/usr/local                 \
+    && cp -a ${SAMBA_PATH}/. ${ROOTFS}/             \
+    && rm -rf ${ROOTFS}/var/lock ${ROOTFS}/var/run  \
+    && for d in lib lib64 bin sbin; do              \
          [ -e /usr/local/$d ] && cp -a /usr/local/$d ${ROOTFS}/usr/local/ || true; \
        done \
     && rm -rf ${ROOTFS}/usr/local/lib/gcc   \
@@ -153,15 +153,18 @@ ARG RUNTIME_APT_DEPS
 ENV PATH=/usr/local/bin:/usr/local/sbin:$PATH
 
 # рантайм-зависимости AD DC
-RUN apt-get update      \
+RUN apt-get update                  \
     && apt-get install -y --no-install-recommends ${RUNTIME_APT_DEPS} \
-    && apt-get clean    \
-    && rm -rf           \
-        /var/lib/apt/lists/* \
+    && apt-get clean                \
+    && rm -rf                       \
+        /var/lib/apt/lists/*        \
         /var/cache/apt/archives/*
 
 COPY --from=dist ${ROOTFS}/ /
+
 COPY ad/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY ad/provision-objects.sh        /docker-entrypoint-init.d/10-provision-objects.sh
+COPY ad/domain-objects.conf.example /docker-entrypoint-init.d/domain-objects.conf.example
 
 RUN set -eux \
     && printf '%s\n' /usr/local/lib /usr/local/lib64 /lib /usr/lib > /etc/ld.so.conf.d/000-runtime.conf \
@@ -170,7 +173,7 @@ RUN set -eux \
     && ln -sf /usr/local/sbin/kadmind /usr/sbin/kadmind \
     && rm -f /etc/samba/smb.conf \
     && samba --version \
-    && chmod +x /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh /docker-entrypoint-init.d/10-provision-objects.sh \
     && mkdir -p /docker-entrypoint-init.d
 
 EXPOSE 53/tcp 53/udp 88/tcp 88/udp 464/tcp 464/udp 389/tcp 636/tcp 3268/tcp 3269/tcp

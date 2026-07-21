@@ -1,0 +1,73 @@
+# domain-objects.conf — декларативное наполнение AD (образец / template).
+#
+# ЭТО ОБРАЗЕЦ. Скопируй рядом с сервисом как domain-objects.conf, подставь пароли,
+# и смонтируй в контейнер: `- ./domain-objects.conf:/docker-entrypoint-init.d/domain-objects.conf:ro`.
+# Реальный файл с паролями держи вне git. Провизионер (10-provision-objects.sh) уже
+# встроен в образ и запустится сам, когда AD поднимется; без этого файла — graceful skip.
+#
+# ВНИМАНИЕ: пароль не должен содержать двоеточие ':' (это разделитель полей).
+
+# Группы (роли). DN групп зеркалится в group_role_map конфига приложения.
+# Формат: "имя[:gidNumber]". gidNumber нужен только группам, чьи участники ходят
+# на файловые шары samba-ad (rfc2307 POSIX-маппинг).
+AD_GROUPS=(
+  boba-DEV
+  boba-ADM
+  boba-READ
+  confluence-users
+  # smbusers — общая группа файловых SMB-пользователей; gidNumber совпадает с
+  # владельцем public-каталога на диске.
+  "smbusers:2000"
+)
+
+# Пользователи:  "имя:пароль:группа1,группа2[:uidNumber:gidNumber]"
+#   uidNumber/gidNumber задаются только файловым SMB-пользователям. Значения ДОЛЖНЫ
+#   совпадать с владельцем существующих каталогов на диске, иначе AD-юзер получит
+#   авто-uid из idmap-диапазона и не попадёт в свои 0700-каталоги.
+AD_USERS=(
+  # доменный SSO + файловые шары
+  "solomatovs:<USER_PASSWORD>:boba-DEV,boba-ADM,smbusers:2000:2000"
+  "readonly:<USER_PASSWORD>:boba-READ"
+  # файловый SMB-пользователь
+  "karmusha:<USER_PASSWORD>:smbusers:2001:2000"
+)
+
+# Сервисные учётки:  "имя:пароль:spn1,spn2:delegation[:keytab]"
+#   delegation:
+#     ""               -> без делегирования
+#     "any"            -> неограниченное (for-any-service / unconstrained)
+#     "to=spn1,spn2"   -> ограниченное (constrained), только Kerberos
+#     "proto=spn1,..." -> ограниченное + protocol transition (S4U2Self -> S4U2Proxy)
+#   keytab:  УСТАРЕЛО и ИГНОРИРУЕТСЯ. samba-ad заводит только AD-объекты и keytab'ы
+#            НЕ генерирует. keytab делается вручную по необходимости и кладётся рядом
+#            с сервисом:
+#              docker exec samba-ad samba-tool domain exportkeytab /tmp/x.keytab \
+#                --principal=HTTP/<spn>.example.com@example.COM
+#              docker cp samba-ad:/tmp/x.keytab <compose>/<service>/<name>.keytab
+#   ВАЖНО: SPN уникален на весь домен — один SPN нельзя дать двум учёткам.
+#   Поэтому у каждого режима делегирования свой host в SPN.
+AD_SERVICES=(
+  # веб-сервис без делегирования
+  'boba-svc:<SERVICE_PASSWORD>:HTTP/example.com::'
+  # примеры режимов делегирования (SPN у каждого свой host):
+  # "svc-any:<SERVICE_PASSWORD>:HTTP/any.example.com:any:"
+  # "svc-to:<SERVICE_PASSWORD>:HTTP/to.example.com:to=postgres/postgres-17.example.com:"
+  # "svc-proto:<SERVICE_PASSWORD>:HTTP/proto.example.com:proto=postgres/postgres-17.example.com:"
+  # бэкенд postgres: короткий + FQDN SPN (принимает делегированные билеты)
+  'postgres-svc:<SERVICE_PASSWORD>:postgres/postgres-17,postgres/postgres-17.example.com::'
+  # CloudBeaver (in-process SPNEGO + constrained delegation с protocol transition):
+  # держит все веб-SPN (публичное имя за nginx + docker-alias + dev-инстанс),
+  # делает S4U2Self -> S4U2Proxy на postgres от имени вошедшего пользователя.
+  'cloudbeaver-svc:<SERVICE_PASSWORD>:HTTP/dbeaver.example.com,HTTP/cloudbeaver.example.com,HTTP/cloudbeaver-debug.example.com:proto=postgres/postgres-17.example.com,postgres/postgres-17:'
+  # Confluence (EasySSO Kerberos/SPNEGO): держит SPN веб-сервиса за nginx
+  'confl-svc:<SERVICE_PASSWORD>:HTTP/confl.example.com::'
+  # nginx (SPNEGO): держит SPN веб-сервиса за nginx, проверяет билеты по keytab
+  'nginx-svc:<SERVICE_PASSWORD>:HTTP/grafana.example.com::'
+)
+
+# Computer-аккаунты:  "имя:пароль"
+#   Объект-компьютер (sAMAccountName оканчивается на '$'). Нужны NTLM-движкам
+#   (Jespa в EasySSO для Confluence). Пароль выставляется идемпотентно на каждом прогоне.
+AD_COMPUTERS=(
+  "easysso:<COMPUTER_PASSWORD>"
+)
