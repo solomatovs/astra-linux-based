@@ -91,14 +91,6 @@ RUN printf '%s\n' \
         > /etc/ld.so.conf.d/rust-local.conf \
     && ldconfig
 
-# corp ca
-COPY artifacts/ca-chain.crt* /tmp/cacrt/
-RUN if [ -f /tmp/cacrt/ca-chain.crt ] && grep -qE '^-----BEGIN CERTIFICATE-----' /tmp/cacrt/ca-chain.crt; then \
-        cp /tmp/cacrt/ca-chain.crt /usr/local/share/ca-certificates/ca-chain.crt \
-        && update-ca-certificates; \
-    fi \
-    && rm -rf /tmp/cacrt
-
 # corp nexus
 COPY artifacts/cargo-config.toml* /tmp/cargoconf/
 RUN if [ -f /tmp/cargoconf/cargo-config.toml ]; then \

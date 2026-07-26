@@ -1,0 +1,39 @@
+// ============================================================
+// Глобальный init-скрипт gradle. Реальный файл — init.gradle,
+// копируется в /usr/local/gradle/init.d/init.gradle и применяется
+// ко всем сборкам без правки самих проектов.
+// По умолчанию отсутствует — gradle ходит в mavenCentral напрямую.
+//
+// Для закрытого контура репозитории проекта ПЕРЕОПРЕДЕЛЯЮТСЯ на
+// внутренний nexus: иначе любой build.gradle с mavenCentral()
+// попытается выйти в интернет.
+//
+// Плагины тянутся из отдельного репозитория (Gradle Plugin Portal),
+// поэтому settings-блок нужен отдельно от dependencies.
+// ============================================================
+
+def nexus = 'http://nexus.internal.example.com/repository/maven-public/'
+
+settingsEvaluated { settings ->
+    settings.pluginManagement {
+        repositories {
+            clear()
+            maven {
+                url = nexus
+                allowInsecureProtocol = true
+                // credentials { username = 'CHANGE_ME'; password = 'CHANGE_ME' }
+            }
+        }
+    }
+}
+
+allprojects {
+    repositories {
+        clear()
+        maven {
+            url = nexus
+            allowInsecureProtocol = true
+            // credentials { username = 'CHANGE_ME'; password = 'CHANGE_ME' }
+        }
+    }
+}

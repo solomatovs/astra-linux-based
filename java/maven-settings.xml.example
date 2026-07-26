@@ -1,0 +1,66 @@
+<!--
+ ============================================================
+ Глобальный settings.xml для maven. Реальный файл —
+ maven-settings.xml, копируется в /usr/local/maven/conf/settings.xml.
+ По умолчанию отсутствует — maven ходит в central напрямую.
+
+ Для закрытого контура зеркалируем ВСЁ (<mirrorOf>*</mirrorOf>)
+ на внутренний nexus, иначе сборка попытается выйти в интернет.
+
+ Если nexus по HTTPS с корпоративным CA — положите цепочку в
+ ca-chain.crt, она попадёт в системный trust store, но java
+ использует СВОЙ cacerts, поэтому CA дополнительно импортируется
+ в /usr/local/java/lib/security/cacerts (см. Dockerfile).
+ ============================================================
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+
+  <!-- локальный репозиторий внутри образа -->
+  <localRepository>/root/.m2/repository</localRepository>
+
+  <mirrors>
+    <mirror>
+      <id>nexus</id>
+      <name>internal nexus</name>
+      <url>http://nexus.internal.example.com/repository/maven-public/</url>
+      <mirrorOf>*</mirrorOf>
+    </mirror>
+  </mirrors>
+
+  <!-- раскомментируйте, если nexus требует авторизацию
+  <servers>
+    <server>
+      <id>nexus</id>
+      <username>CHANGE_ME</username>
+      <password>CHANGE_ME</password>
+    </server>
+  </servers>
+  -->
+
+  <profiles>
+    <profile>
+      <id>nexus</id>
+      <repositories>
+        <repository>
+          <id>central</id>
+          <url>http://central</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>central</id>
+          <url>http://central</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+
+  <activeProfiles>
+    <activeProfile>nexus</activeProfile>
+  </activeProfiles>
+
+</settings>

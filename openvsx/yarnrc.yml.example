@@ -1,0 +1,22 @@
+# ============================================================
+# yarn-конфиг для сборки webui в закрытом контуре (Nexus).
+# Реальный файл — artifacts/yarnrc.yml, ДОПИСЫВАЕТСЯ в конец
+# webui/.yarnrc.yml перед yarn install.
+# По умолчанию отсутствует — yarn ходит в registry.yarnpkg.com.
+#
+# webui собирается yarn 4 (berry): он НЕ читает npmrc, у него свой
+# формат конфига. Сам yarn качать не надо — бинарник вендорен в
+# исходниках openvsx (webui/.yarn/releases/yarn-*.cjs).
+#
+# Для nexus раскомментируйте и подставьте свой адрес:
+#
+#   npmRegistryServer: "https://nexus.example.ru/repository/npm-group/"
+#   httpsCaFilePath: /etc/ssl/certs/ca-certificates.crt
+#   npmAlwaysAuth: true
+#   npmAuthIdent: "user:pass"
+#
+# Если nexus по http:
+#
+#   unsafeHttpWhitelist:
+#     - nexus.example.ru
+# ============================================================

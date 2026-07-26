@@ -8,7 +8,7 @@ TEST_DIR		?= $(BASE_DIR)/test
 
 # список версий, которые поддерживает сборщик
 # версии собираются одна за другой, строго по цепочке
-VERSION_CHAIN		?= 8.17.0 10.24.1 12.22.12 14.21.3 16.20.2 18.20.5 20.18.1 22.11.0
+VERSION_CHAIN		?= 8.17.0 10.24.1 12.22.12 14.21.3 16.20.2 18.20.5 20.18.1 22.11.0 22.22.1
 # целевая версия сборки. по умолчанию берется последняя версия
 # соответственно для ее сборки потребуется собрать все предыдущие версии в цепочки
 VERSION      		?= $(lastword $(VERSION_CHAIN))
@@ -38,6 +38,7 @@ DEPS_16.20.2	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(L
 DEPS_18.20.5	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
 DEPS_20.18.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
 DEPS_22.11.0	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
+DEPS_22.22.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
 
 # базовое название для образа
 IMAGE			:= dmp/nodejs

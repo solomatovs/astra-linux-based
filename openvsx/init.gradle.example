@@ -1,0 +1,49 @@
+// ============================================================
+// Глобальный init-скрипт gradle. Реальный файл — artifacts/init.gradle,
+// копируется в /usr/local/gradle/init.d/init.gradle поверх того, что
+// запечён в dmp/java, и применяется ко всем сборкам.
+// По умолчанию отсутствует — gradle ходит в mavenCentral напрямую.
+//
+// Для закрытого контура репозитории ПЕРЕОПРЕДЕЛЯЮТСЯ на внутренний nexus.
+//
+// В отличие от init.gradle.example проекта java здесь дополнительно
+// переопределяется buildscript: build.gradle openvsx объявляет
+// buildscript { repositories { mavenCentral() } } для classpath-зависимостей
+// (hibernate-gradle-plugin и др.), и обычный allprojects его не перекрывает.
+// ============================================================
+
+def nexus = 'http://nexus.internal.example.com/repository/maven-public/'
+
+settingsEvaluated { settings ->
+    settings.pluginManagement {
+        repositories {
+            clear()
+            maven {
+                url = nexus
+                allowInsecureProtocol = true
+                // credentials { username = 'CHANGE_ME'; password = 'CHANGE_ME' }
+            }
+        }
+    }
+}
+
+allprojects {
+    buildscript {
+        repositories {
+            clear()
+            maven {
+                url = nexus
+                allowInsecureProtocol = true
+                // credentials { username = 'CHANGE_ME'; password = 'CHANGE_ME' }
+            }
+        }
+    }
+    repositories {
+        clear()
+        maven {
+            url = nexus
+            allowInsecureProtocol = true
+            // credentials { username = 'CHANGE_ME'; password = 'CHANGE_ME' }
+        }
+    }
+}

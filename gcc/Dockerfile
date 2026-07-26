@@ -28,31 +28,6 @@ ARG APT_DEPS
 ARG GCC_PATH=/opt/gcc
 
 
-RUN printf '%s\n'                                                   \
-        'APT::Get::AllowUnauthenticated "true";'                    \
-        'Acquire::AllowInsecureRepositories "true";'                \
-        'Acquire::AllowDowngradeToInsecureRepositories "true";'     \
-        > /etc/apt/apt.conf.d/99insecure                            \
-    && printf '%s\n'                                                \
-        'Dpkg::Options { "--force-confdef"; "--force-confold"; };'  \
-        > /etc/apt/apt.conf.d/90noninteractive
-
-# apt-sources.list replace
-COPY apt-sources.list* /tmp/aptsrc/
-RUN if [ -f /tmp/aptsrc/apt-sources.list ] && grep -qvE '^[[:space:]]*(#|$)' /tmp/aptsrc/apt-sources.list; then \
-        cp /tmp/aptsrc/apt-sources.list /etc/apt/sources.list; \
-    fi \
-    && rm -rf /tmp/aptsrc
-
-# ca-chain.crt replace
-COPY ca-chain.crt* /tmp/cacrt/
-RUN if [ -f /tmp/cacrt/ca-chain.crt ] && grep -qE '^-----BEGIN CERTIFICATE-----' /tmp/cacrt/ca-chain.crt; then \
-        cp /tmp/cacrt/ca-chain.crt /usr/local/share/ca-certificates/ca-chain.crt \
-        && update-ca-certificates; \
-    fi \
-    && rm -rf /tmp/cacrt
-
-
 # копируем gcc из предыдущего образа и обновляем ldconfig если он есть в этом образе
 # и в зависиомсти от того есть ли gcc новый, то ставим разный набор apt зависимостей
 COPY --from=prev /seed/ /

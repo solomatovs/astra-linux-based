@@ -1,0 +1,45 @@
+# ============================================================
+# npm config для сборки code-server из исходников в закрытом контуре (Nexus).
+#
+# Файл нужен почти всегда: собирается не только сам code-server, но и весь
+# lib/vscode — это тысячи пакетов, которые ставятся в каждый каталог из
+# build/npm/dirs.ts (корень, build, remote, extensions и каждое расширение).
+#
+# Скопируйте этот файл в artifacts/npmrc и правьте его.
+# Подхватывается как глобальный конфиг npm: /usr/local/etc/npmrc.
+#
+#   registry=https://nexus.example.ru/repository/npm-group/
+#   //nexus.example.ru/repository/npm-group/:_auth=BASE64(user:pass)
+#   always-auth=true
+#   cafile=/etc/ssl/certs/ca-certificates.crt
+#
+# Корпоративный CA запекается в базовый dmp/glibc:2.28
+# (glibc/2.28/artifacts/ca-chain.crt) и виден как
+# /etc/ssl/certs/ca-certificates.crt; node видит его через
+# NODE_EXTRA_CA_CERTS (выставлен в образе dmp/nodejs).
+#
+# ------------------------------------------------------------
+# build_from_source и target/disturl задаёт сам vscode в своих .npmrc
+# (корневой — под electron, remote/ — под node), переопределять не нужно.
+#
+# Что уходит мимо npm-реестра и потому лежит в artifacts/src, подкладываясь
+# в Dockerfile до начала сборки (см. `make sources`):
+#   ripgrep            @vscode/ripgrep качает бинарник с api.github.com
+#   заголовки node     remote/.npmrc указывает disturl=nodejs.org
+#   заголовки electron корневой .npmrc указывает disturl=electronjs.org
+#   node для бандла    gulp кладёт его внутрь vscode-reh-web и качает с nodejs.org
+#   расширения         js-debug и др. из product.json тянутся из marketplace
+#
+#   git-зависимости    @vscode/gulp-electron записан в package-lock как
+#                      git+ssh://git@github.com/..., ставится мимо реестра
+#
+# Про последний случай: git config insteadOf тут НЕ помогает. Для github npm
+# не зовет git вообще, а срезает угол и качает тарбол с codeload.github.com,
+# так что подменять нечего. Поэтому `make sources` кладет зеркало репозитория
+# в artifacts/src/gitdeps-<версия>, а Dockerfile переписывает resolved в
+# package-lock на git+file:///usr/src/gitdeps/... — такой хост npm не считает
+# «hosted» и клонирует его обычным git из локального пути.
+#
+# Зависимости самого этого пакета (@electron/get, gulp-filter и прочие) —
+# обычные пакеты из реестра и приходят через nexus.
+# ============================================================

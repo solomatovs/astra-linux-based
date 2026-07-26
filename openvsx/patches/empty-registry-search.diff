@@ -1,0 +1,30 @@
+Поиск на пустом реестре отдает 500: getMaxDownloadCount() объявлен
+примитивом int, а `select max(...)` по пустой таблице extension возвращает
+null — spring падает с "Null return value from advice does not match
+primitive return type" (RelevanceService$SearchStats). Проявляется только
+до публикации первого расширения, но реестр в закрытом контуре ровно так
+и начинает жизнь. Меняем тип на Integer и подставляем 0.
+
+--- a/server/src/main/java/org/eclipse/openvsx/repositories/ExtensionRepository.java
++++ b/server/src/main/java/org/eclipse/openvsx/repositories/ExtensionRepository.java
+@@ -38,7 +38,7 @@
+     long count();
+
+     @Query("select max(e.downloadCount) from Extension e")
+-    int getMaxDownloadCount();
++    Integer getMaxDownloadCount();
+
+     @Query("select e from Extension e where concat(e.namespace.name, '.', e.name) not in(?1)")
+     Streamable<Extension> findAllNotMatchingByExtensionId(List<String> extensionIds);
+--- a/server/src/main/java/org/eclipse/openvsx/repositories/RepositoryService.java
++++ b/server/src/main/java/org/eclipse/openvsx/repositories/RepositoryService.java
+@@ -160,7 +160,8 @@
+     }
+
+     public int getMaxExtensionDownloadCount() {
+-        return extensionRepo.getMaxDownloadCount();
++        var maxDownloadCount = extensionRepo.getMaxDownloadCount();
++        return maxDownloadCount == null ? 0 : maxDownloadCount;
+     }
+
+     public ExtensionVersion findVersion(String version, String targetPlatform, Extension extension) {
