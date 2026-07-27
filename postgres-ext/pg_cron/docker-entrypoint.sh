@@ -1,13 +1,12 @@
 #!/bin/bash
-# entrypoint -ext образа: initdb при пустом PGDATA + прописывание shared_preload_libraries
-# (pgaudit/pg_cron/timescaledb требуют preload). Список задаётся PG_EXT_PRELOAD (по major).
+# entrypoint образа: initdb при пустом PGDATA + preload pg_cron
+# cron.database_name — база, в которой pg_cron держит метаданные заданий
 set -euo pipefail
 
 : "${PGDATA:=/var/lib/postgresql/data}"
 : "${POSTGRES_USER:=postgres}"
 : "${POSTGRES_PASSWORD:=postgres}"
 : "${POSTGRES_DB:=postgres}"
-: "${PG_EXT_PRELOAD:=pgaudit,pg_cron}"
 
 if [ "$1" = "postgres" ] && [ ! -s "$PGDATA/PG_VERSION" ]; then
     mkdir -p "$PGDATA"
@@ -18,9 +17,8 @@ if [ "$1" = "postgres" ] && [ ! -s "$PGDATA/PG_VERSION" ]; then
     echo "host all all all md5" >> "$PGDATA/pg_hba.conf"
     {
         echo "listen_addresses = '*'"
-        echo "shared_preload_libraries = '$PG_EXT_PRELOAD'"
+        echo "shared_preload_libraries = 'pg_cron'"
         echo "cron.database_name = '$POSTGRES_DB'"
-        echo "timescaledb.telemetry_level = off"
     } >> "$PGDATA/postgresql.conf"
 fi
 

@@ -1,0 +1,46 @@
+# ============================================================
+# Глобальный конфиг poetry для образа dmp/poetry.
+#
+# Реальный файл кладётся рядом с Dockerfile под именем
+# poetry-config.toml (он в .gitignore) и попадает в образ
+# как /etc/pypoetry/config.toml (POETRY_CONFIG_DIR=/etc/pypoetry).
+# По умолчанию файла нет — poetry ходит в pypi.org.
+#
+# Формат — тот же, что у `poetry config <ключ> <значение>`,
+# показать итоговый: poetry config --list
+# ============================================================
+
+# [virtualenvs]
+# # окружение проекта в .venv рядом с pyproject.toml, а не в общем кэше:
+# # в контейнере /workspace обычно смонтирован с хоста, а кэш — нет
+# in-project = true
+# # не наследовать системные site-packages
+# options.system-site-packages = false
+
+# # зеркало pypi в закрытом контуре.
+# # ВАЖНО: poetry НЕ читает pip.conf и не имеет глобальной настройки индекса —
+# # источник задаётся в pyproject.toml проекта:
+# #
+# #   [[tool.poetry.source]]
+# #   name = "nexus"
+# #   url = "https://nexus.example.com/repository/pypi/simple/"
+# #   priority = "primary"
+# #
+# # или разово командой в каталоге проекта:
+# #   poetry source add --priority=primary nexus https://nexus.example.com/repository/pypi/simple/
+# #
+# # здесь настраивается только КУДА публиковать (poetry publish -r nexus):
+# [repositories.nexus]
+# url = "https://nexus.example.com/repository/pypi/"
+
+# # keyring в контейнере обычно недоступен (нет DBus и секретницы), и poetry
+# # на каждой команде с индексом пишет предупреждение, прежде чем откатиться
+# # на auth.toml. Отключение убирает шум:
+# [keyring]
+# enabled = false
+
+# # куда poetry 2.x кладёт интерпретаторы `poetry python install`
+# # (сами дистрибутивы качаются с github — в закрытом контуре команда
+# # работать не будет, интерпретаторы берутся из соседнего dmp/python)
+# [python]
+# installation-dir = "/usr/local/share/poetry/python"

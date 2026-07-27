@@ -1,4 +1,4 @@
-# nginx
+# nginx. сторонние модули собираются отдельно, см. ../nginx-ext
 ARG BUILD_IMAGE=dmp/gcc:8.5.0-dist
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
@@ -6,6 +6,10 @@ FROM ${BUILD_IMAGE} AS dist
 
 ARG APT_DEPS
 ARG NGINX_PATH=/opt/nginx
+# исходники остаются в -dist образе: по ним и по configure.args
+# ../nginx-ext собирает динамические модули
+ARG NGINX_SRC=/usr/src/nginx
+ARG DEPS_SRC=/usr/src/deps
 
 # gcc
 RUN cp -a /opt/gcc/usr/local/. /usr/local/                          \
@@ -24,66 +28,24 @@ RUN if [ -n "${APT_DEPS}" ]; then                                   \
             /var/cache/apt/archives/*;                              \
     fi
 
-# krb5
-ARG KRB5_VERSION
-COPY artifacts/src/krb5-${KRB5_VERSION}.tar.gz /tmp/krb5.tar.gz
-RUN cd /tmp                             \
-    && tar xf krb5.tar.gz               \
-    && cd krb5-${KRB5_VERSION}/src      \
-    && ./configure                      \
-        --prefix=/usr/local             \
-        --disable-rpath                 \
-        --disable-pkinit                \
-    && make -j"$(nproc)"                \
-    && make install                     \
-    && ldconfig                         \
-    && cd / && rm -rf /tmp/*
-
-# OpenLDAP client
-ARG OPENLDAP_VERSION
-COPY artifacts/src/openldap-${OPENLDAP_VERSION}.tgz /tmp/openldap.tgz
-RUN cd /tmp                             \
-    && tar xf openldap.tgz              \
-    && cd openldap-${OPENLDAP_VERSION}  \
-    && ./configure                      \
-        --prefix=/usr/local             \
-        --disable-slapd --disable-static \
-        --without-tls --without-cyrus-sasl --without-systemd \
-    && make depend                      \
-    && make -j"$(nproc)" -C include     \
-    && make -j"$(nproc)" -C libraries   \
-    && make -C include install          \
-    && make -C libraries install        \
-    && ldconfig                         \
-    && cd / && rm -rf /tmp/*
-
 ARG NGINX_VERSION
 ARG PCRE2_VERSION
 ARG ZLIB_VERSION
 ARG OPENSSL_VERSION
 ARG NGINX_HTTP3=0
-ARG LDAP_MODULE_REF
-ARG NJS_VERSION
 
 COPY artifacts/src/ /tmp/src/
-COPY spnego-http-auth-nginx-module/ /tmp/spnego-http-auth-nginx-module/
 RUN set -eux;                                                            \
-    cd /tmp;                                                             \
-    tar -xf src/pcre2-${PCRE2_VERSION}.tar.gz;                           \
-    tar -xf src/zlib-${ZLIB_VERSION}.tar.gz;                             \
-    tar -xf src/openssl-${OPENSSL_VERSION}.tar.gz;                       \
-    tar -xf src/nginx-${NGINX_VERSION}.tar.gz;                           \
-    tar -xf src/nginx-auth-ldap-${LDAP_MODULE_REF}.tar.gz;               \
-    tar -xf src/njs-${NJS_VERSION}.tar.gz;                               \
-    ( cd njs-${NJS_VERSION}                                              \
-      && ./configure --cc=gcc --no-openssl --no-libxml2 --no-zlib        \
-                     --no-quickjs --no-pcre                              \
-      && make -j"$(nproc)" libnjs );                                     \
-    export NJS_OPENSSL=NO NJS_LIBXSLT=NO NJS_ZLIB=NO NJS_QUICKJS=NO;     \
-    cd nginx-${NGINX_VERSION};                                           \
+    mkdir -p ${DEPS_SRC} $(dirname ${NGINX_SRC});                        \
+    tar -xf /tmp/src/pcre2-${PCRE2_VERSION}.tar.gz     -C ${DEPS_SRC};   \
+    tar -xf /tmp/src/zlib-${ZLIB_VERSION}.tar.gz       -C ${DEPS_SRC};   \
+    tar -xf /tmp/src/openssl-${OPENSSL_VERSION}.tar.gz -C ${DEPS_SRC};   \
+    tar -xf /tmp/src/nginx-${NGINX_VERSION}.tar.gz -C $(dirname ${NGINX_SRC}); \
+    mv $(dirname ${NGINX_SRC})/nginx-${NGINX_VERSION} ${NGINX_SRC};      \
+    cd ${NGINX_SRC};                                                     \
     if [ "${NGINX_HTTP3}" = "1" ]; then HTTP3="--with-http_v3_module"; else HTTP3=""; fi; \
     set --                                                               \
-        --prefix=/etc/nginx                                             \
+        --prefix=/etc/nginx                                              \
         --sbin-path=/usr/sbin/nginx                                      \
         --modules-path=/usr/lib/nginx/modules                            \
         --conf-path=/etc/nginx/nginx.conf                                \
@@ -100,10 +62,10 @@ RUN set -eux;                                                            \
         --with-threads                                                   \
         --with-file-aio                                                  \
         --with-compat                                                    \
-        --with-pcre=/tmp/pcre2-${PCRE2_VERSION}                          \
+        --with-pcre=${DEPS_SRC}/pcre2-${PCRE2_VERSION}                   \
         --with-pcre-jit                                                  \
-        --with-zlib=/tmp/zlib-${ZLIB_VERSION}                            \
-        --with-openssl=/tmp/openssl-${OPENSSL_VERSION}                   \
+        --with-zlib=${DEPS_SRC}/zlib-${ZLIB_VERSION}                     \
+        --with-openssl=${DEPS_SRC}/openssl-${OPENSSL_VERSION}            \
         --with-openssl-opt=no-tests                                      \
         --with-cc-opt=-I/usr/local/include                               \
         --with-ld-opt="-L/usr/local/lib -Wl,-rpath,/usr/local/lib"       \
@@ -129,43 +91,34 @@ RUN set -eux;                                                            \
         --with-stream                                                    \
         --with-stream_ssl_module                                         \
         --with-stream_realip_module                                      \
-        --with-stream_ssl_preread_module                                 \
-        --add-dynamic-module=/tmp/spnego-http-auth-nginx-module          \
-        --add-dynamic-module=/tmp/nginx-auth-ldap-${LDAP_MODULE_REF}     \
-        --add-dynamic-module=/tmp/njs-${NJS_VERSION}/nginx;              \
+        --with-stream_ssl_preread_module;                                \
+    # аргументы configure для сборки модулей в ../nginx-ext
+    : > configure.args;                                                  \
+    for a in "$@"; do printf '%s\n' "$a" >> configure.args; done;        \
     # обычный бинарник /usr/sbin/nginx
     ./configure "$@";                                                    \
     make -j"$(nproc)";                                                   \
     make install DESTDIR=${NGINX_PATH};                                  \
-    # динамические модули обычной сборки /etc/nginx/modules
-    mkdir -p ${NGINX_PATH}/etc/nginx/modules;                            \
-    cp objs/*.so ${NGINX_PATH}/etc/nginx/modules/;                       \
-    # 2) debug-бинарник (--with-debug) /usr/sbin/nginx-debug
+    # debug-бинарник (--with-debug) /usr/sbin/nginx-debug
     ./configure "$@" --with-debug;                                       \
     make -j"$(nproc)";                                                   \
     cp objs/nginx ${NGINX_PATH}/usr/sbin/nginx-debug;                    \
-    # debug-версии модулей -> *.so-debug
-    for so in objs/*.so; do cp "$so" "${NGINX_PATH}/etc/nginx/modules/$(basename "$so")-debug"; done; \
-    mkdir -p ${NGINX_PATH}/var/cache/nginx ${NGINX_PATH}/var/log/nginx;  \
     strip ${NGINX_PATH}/usr/sbin/nginx ${NGINX_PATH}/usr/sbin/nginx-debug; \
-    # рантайм-.so krb5/openldap кладём в DESTDIR (попадут в /usr/local/lib) \
-    mkdir -p ${NGINX_PATH}/usr/local/lib;                                \
-    for p in libgssapi_krb5 libkrb5 libk5crypto libcom_err               \
-             libkrb5support libverto libldap liblber; do                 \
-        cp -a /usr/local/lib/$p.so* ${NGINX_PATH}/usr/local/lib/ 2>/dev/null || true; \
-    done;                                                                \
-    cp -a /usr/local/lib/krb5 ${NGINX_PATH}/usr/local/lib/ 2>/dev/null || true; \
-    cd /; rm -rf /tmp/*
+    # каталоги для модулей из ../nginx-ext
+    mkdir -p ${NGINX_PATH}/var/cache/nginx ${NGINX_PATH}/var/log/nginx   \
+             ${NGINX_PATH}/etc/nginx/modules                             \
+             ${NGINX_PATH}/etc/nginx/modules.d;                          \
+    # .o не нужны: модулям хватает заголовков и .a
+    find ${NGINX_SRC} ${DEPS_SRC} -name '*.o' -delete;                   \
+    rm -rf /tmp/src
 
 
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG NGINX_PATH=/opt/nginx
 
-# устанавливаем собранный nginx (+ krb5/openldap .so) поверх dmp/glibc
+# устанавливаем собранный nginx поверх dmp/glibc
 COPY --from=dist ${NGINX_PATH} /
-RUN printf '%s\n' /usr/local/lib > /etc/ld.so.conf.d/nginx-local.conf \
-    && ldconfig
 
 # системный пользователь nginx + логи в stdout/stderr контейнера
 RUN groupadd -r nginx --gid=101                                           \
@@ -182,13 +135,6 @@ RUN if [ -f /tmp/nginxconf/nginx.conf ]; then                             \
         cp /tmp/nginxconf/nginx.conf /etc/nginx/nginx.conf;               \
     fi                                                                    \
     && rm -rf /tmp/nginxconf
-
-# krb5.conf replace (realm/keytab для SPNEGO)
-COPY krb5.conf* /tmp/krb5conf/
-RUN if [ -f /tmp/krb5conf/krb5.conf ]; then                               \
-        cp /tmp/krb5conf/krb5.conf /etc/krb5.conf;                        \
-    fi                                                                    \
-    && rm -rf /tmp/krb5conf
 
 EXPOSE 80 443
 STOPSIGNAL SIGQUIT

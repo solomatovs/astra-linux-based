@@ -1,5 +1,6 @@
 # Пример: SPNEGO/Kerberos SSO + группы из PAC -> роль бэкенда (на примере Grafana).
 # Требует: /etc/krb5.conf (см. krb5.conf.example) и keytab HTTP/<host> из AD.
+# Модуль грузится сниппетом /etc/nginx/modules.d/10-spnego.conf (include в nginx.conf).
 #
 # Как это работает:
 #   браузер (доменный) -> получает Kerberos-билет на HTTP/grafana.example.com

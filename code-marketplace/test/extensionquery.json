@@ -1,0 +1,17 @@
+{
+  "filters": [
+    {
+      "criteria": [
+        {
+          "filterType": 8,
+          "value": "Microsoft.VisualStudio.Code"
+        }
+      ],
+      "pageNumber": 1,
+      "pageSize": 50,
+      "sortBy": 0,
+      "sortOrder": 0
+    }
+  ],
+  "flags": 439
+}

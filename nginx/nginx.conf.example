@@ -6,6 +6,9 @@ pid   /run/nginx.pid;
 
 error_log  /var/log/nginx/error.log  notice;
 
+# load_module сторонних модулей: каждый модуль из ../nginx-ext кладёт свой сниппет
+include /etc/nginx/modules.d/*.conf;
+
 events {
     worker_connections  1024;
 }

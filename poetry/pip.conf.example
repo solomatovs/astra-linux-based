@@ -1,0 +1,31 @@
+# ============================================================
+# Конфиг pip для шага `make sources` — единственного шага,
+# которому нужна сеть (он качает колёса всего дерева poetry).
+#
+# Реальный файл кладётся рядом с Makefile под именем pip.conf
+# (он в .gitignore) и монтируется в контейнер как /etc/pip.conf.
+# По умолчанию файла нет — pip ходит в pypi.org.
+#
+# В образ этот файл НЕ попадает: сборка образа идёт с
+# --no-index, а рантайм-poetry читает не pip.conf, а свои
+# источники (см. poetry-config.toml.example).
+#
+# Файл того же формата, что и python/3/pip.conf в соседнем
+# проекте, — можно держать один и симлинкать.
+#
+# Внимание: INDEX_URL= в командной строке make старше этого
+# файла (аргумент pip перебивает конфиг). Либо конфиг, либо
+# переменная, не оба сразу.
+# ============================================================
+
+# [global]
+# index-url = https://nexus.example.com/repository/pypi/simple
+# extra-index-url = https://nexus2.example.com/repository/pypi/simple
+# trusted-host =
+#     nexus.example.com
+#     nexus2.example.com
+# # свой корневой сертификат вместо trusted-host (правильнее):
+# # cert = /etc/ssl/certs/corp-root.pem
+# # proxy = http://proxy.example.com:3128
+# timeout = 60
+# retries = 5

@@ -2,6 +2,7 @@
 # В отличие от SPNEGO (SSO без пароля), здесь браузер спрашивает логин/пароль
 # (HTTP Basic), а nginx проверяет их bind'ом в AD и членство в группах.
 # TLS к AD выполняет сам nginx (ldaps:// через ngx_ssl), поэтому libldap без tls.
+# Модуль грузится сниппетом /etc/nginx/modules.d/20-auth-ldap.conf (include в nginx.conf).
 
 # ldap_server объявляется в http-контексте (файл включается внутри http{}).
 # ВАЖНО: хост из url резолвится на СТАРТЕ nginx (и при nginx -t) — DNS-имя DC

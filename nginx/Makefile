@@ -25,20 +25,6 @@ NO_CACHE			?= 0
 # apt-deps (build)
 APT_DEPS			?= perl bison flex file
 
-# krb5
-KRB5_VERSION		?= 1.21.3
-KRB5_SERIES			?= 1.21
-KRB5_URL			?= https://kerberos.org/dist/krb5
-# OpenLDAP client (auth_ldap)
-OPENLDAP_VERSION	?= 2.6.9
-OPENLDAP_URL		?= https://www.openldap.org/software/download/OpenLDAP/openldap-release
-# njs (ngx_stream_js_module)
-NJS_VERSION			?= 0.9.0
-NJS_URL				?= https://github.com/nginx/njs/archive/refs/tags
-# nginx-auth-ldap (auth_ldap)
-LDAP_MODULE_REF		?= master
-LDAP_MODULE_URL		?= https://github.com/kvspb/nginx-auth-ldap/archive/refs/heads
-
 GLIBC_IMAGE			?= dmp/glibc:2.28
 GCC_IMAGE			?= dmp/gcc:8.5.0-dist
 
@@ -74,6 +60,8 @@ help:
 	@echo "  Свой конфиг: nginx.conf.example -> nginx.conf."
 	@echo "  Другая версия: make all VERSION=1.26.3"
 	@echo ""
+	@echo "  Сторонние модули (spnego, auth-ldap, njs) собираются отдельно: см. ../nginx-ext."
+	@echo ""
 
 
 .PHONY: debug
@@ -92,9 +80,6 @@ debug:
 	$(info NO_CACHE       = $(NO_CACHE))
 	$(info NO_CACHE_TEXT  = $(NO_CACHE_TEXT))
 	$(info APT_DEPS       = $(APT_DEPS))
-	$(info KRB5_VERSION   = $(KRB5_VERSION))
-	$(info OPENLDAP_VERSION = $(OPENLDAP_VERSION))
-	$(info LDAP_MODULE_REF  = $(LDAP_MODULE_REF))
 	$(info IMAGE          = $(IMAGE):$(VERSION))
 	$(info DEPS($(VERSION)) = $(DEPS_$(VERSION)))
 	@true
@@ -119,11 +104,6 @@ sources-%:
 	[ -f "$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" "$(PCRE2_URL)/pcre2-$$pcre2/pcre2-$$pcre2.tar.gz"
 	[ -f "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" "$(ZLIB_URL)/v$$zlib/zlib-$$zlib.tar.gz"
 	[ -f "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
-	# модули kerberos/AD + их зависимости (общие для всех версий)
-	[ -f "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" "$(KRB5_URL)/$(KRB5_SERIES)/krb5-$(KRB5_VERSION).tar.gz"
-	[ -f "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" ] || curl -v -L -o "$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" "$(OPENLDAP_URL)/openldap-$(OPENLDAP_VERSION).tgz"
-	[ -f "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" "$(LDAP_MODULE_URL)/$(LDAP_MODULE_REF).tar.gz"
-	[ -f "$(ARTIFACTS)/src/njs-$(NJS_VERSION).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/njs-$(NJS_VERSION).tar.gz" "$(NJS_URL)/$(NJS_VERSION).tar.gz"
 
 
 # docker build --target dist - дистрибутив со скомпилированными исходниками (без установки в систему)
@@ -148,10 +128,6 @@ dist-%: sources-%
 		--build-arg ZLIB_VERSION=$$zlib 		\
 		--build-arg OPENSSL_VERSION=$$openssl 	\
 		--build-arg NGINX_HTTP3=$$http3 		\
-		--build-arg KRB5_VERSION=$(KRB5_VERSION) 			\
-		--build-arg OPENLDAP_VERSION=$(OPENLDAP_VERSION) 	\
-		--build-arg LDAP_MODULE_REF=$(LDAP_MODULE_REF) 		\
-		--build-arg NJS_VERSION=$(NJS_VERSION) 				\
 		--build-arg APT_DEPS="$(APT_DEPS)" 		\
 		--tag $(IMAGE):$$current-dist 			\
 		--tag $(IMAGE):$$short-dist 			\
@@ -180,10 +156,6 @@ build-%: dist-%
 		--build-arg ZLIB_VERSION=$$zlib 			\
 		--build-arg OPENSSL_VERSION=$$openssl 		\
 		--build-arg NGINX_HTTP3=$$http3 			\
-		--build-arg KRB5_VERSION=$(KRB5_VERSION) 			\
-		--build-arg OPENLDAP_VERSION=$(OPENLDAP_VERSION) 	\
-		--build-arg LDAP_MODULE_REF=$(LDAP_MODULE_REF) 		\
-		--build-arg NJS_VERSION=$(NJS_VERSION) 				\
 		--build-arg APT_DEPS="$(APT_DEPS)" 			\
 		--tag $(IMAGE):$$current 					\
 		--tag $(IMAGE):$$short 						\
@@ -223,11 +195,7 @@ clean-%:
 	rm -f "$(ARTIFACTS)/src/nginx-$$current.tar.gz" \
 		"$(ARTIFACTS)/src/pcre2-$$pcre2.tar.gz" \
 		"$(ARTIFACTS)/src/zlib-$$zlib.tar.gz" \
-		"$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" \
-		"$(ARTIFACTS)/src/krb5-$(KRB5_VERSION).tar.gz" \
-		"$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz" \
-		"$(ARTIFACTS)/src/nginx-auth-ldap-$(LDAP_MODULE_REF).tar.gz" \
-		"$(ARTIFACTS)/src/njs-$(NJS_VERSION).tar.gz"
+		"$(ARTIFACTS)/src/openssl-$$openssl.tar.gz"
 
 
 .PHONY: all

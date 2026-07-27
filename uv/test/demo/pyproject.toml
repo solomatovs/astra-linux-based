@@ -1,0 +1,10 @@
+[project]
+name = "demo"
+version = "0.1.0"
+description = "smoke-test проект для dmp/uv"
+requires-python = ">=3.9"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

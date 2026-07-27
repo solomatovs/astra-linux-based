@@ -8,7 +8,7 @@ TEST_DIR		?= $(BASE_DIR)/test
 
 # список версий, которые поддерживает сборщик
 # версии собираются одна за другой, строго по цепочке
-VERSION_CHAIN		?= 1.4 1.17.13 1.20.6 1.22.6 1.24.5
+VERSION_CHAIN		?= 1.4 1.17.13 1.20.6 1.22.6 1.24.5 1.25.12
 # целевая версия сборки. по умолчанию берется последняя версия
 # соответственно для ее сборки потребуется собрать все предыдущие версии в цепочки
 VERSION      		?= $(lastword $(VERSION_CHAIN))
@@ -26,6 +26,7 @@ DEPS_1.17.13	:= $(GLIBC_IMAGE)	dmp/golang:1.4-dist
 DEPS_1.20.6		:= $(GLIBC_IMAGE)	dmp/golang:1.17.13-dist
 DEPS_1.22.6		:= $(GLIBC_IMAGE)	dmp/golang:1.20.6-dist
 DEPS_1.24.5		:= $(GLIBC_IMAGE)	dmp/golang:1.22.6-dist
+DEPS_1.25.12	:= $(GLIBC_IMAGE)	dmp/golang:1.24.5-dist
 
 # базовое название для образа
 IMAGE			:= dmp/golang
@@ -83,7 +84,8 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	[ -f "$(ARTIFACTS)/src/golang-$$current.tar.gz" ] || curl -v -o "$(ARTIFACTS)/src/golang-$$current.tar.gz" "$(BASE_URL)/go$$current.tar.gz"
+	# -f -L обязательны: github отдает 302 на codeload, без них архив выйдет битым
+	[ -f "$(ARTIFACTS)/src/golang-$$current.tar.gz" ] || curl -fvL -o "$(ARTIFACTS)/src/golang-$$current.tar.gz" "$(BASE_URL)/go$$current.tar.gz"
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)

@@ -1,0 +1,280 @@
+BASE_DIR      	?= $(abspath .)
+ARTIFACTS     	?= $(BASE_DIR)/artifacts
+BUILD_CONTEXT 	?= $(BASE_DIR)
+TEST_DIR		?= $(BASE_DIR)/test
+
+
+.DEFAULT_GOAL := help
+
+# список версий, которые поддерживает сборщик
+# версии собираются одна за другой, строго по цепочке
+VERSION_CHAIN		?= 0.9.26
+# целевая версия сборки. по умолчанию берется последняя версия
+VERSION      		?= $(lastword $(VERSION_CHAIN))
+# базовый url адрес для скачивания исходников собираемых в Dockerfile
+BASE_URL			?= https://github.com/astral-sh/uv/archive/refs/tags
+# базовый url адрес для чтения манифестов репозитория, только для make deps
+RAW_BASE_URL		?= https://raw.githubusercontent.com/astral-sh/uv
+# выполнять ли сброс кэша: docker build --no-cache
+NO_CACHE			?= 0
+
+GLIBC_IMAGE			?= dmp/glibc:2.28
+# rust-тулчейн — им и собираем, и вендорим крейты
+RUST_IMAGE			?= dmp/rust:1.90.0
+# интерпретатор для функциональной части make test, в рантайме его нет
+PYTHON_IMAGE		?= dmp/python:3.11
+APT_DEPS			?=
+
+# CARGO_HOME внутри $(RUST_IMAGE)
+CARGO_HOME			?= /usr/local/cargo
+# cargo-config закрытого контура (proxy/nexus) для вендоринга.
+# монтируется в CARGO_HOME, если файл есть; см. cargo-config.toml.example
+CARGO_CONF_MOUNT	:= $(if $(wildcard $(BASE_DIR)/cargo-config.toml),-v "$(BASE_DIR)/cargo-config.toml":$(CARGO_HOME)/config.toml:ro,)
+
+# версия uv ограничена сверху версией rustc: uv объявляет MSRV в Cargo.toml,
+# и он растёт быстрее, чем цепочка соседнего проекта rust.
+# узнать значение для новой версии: make deps VERSION=<версия>
+#
+#   uv 0.9.0  .. 0.9.8    MSRV 1.88
+#   uv 0.9.9  .. 0.9.26   MSRV 1.89   <- потолок текущего контура
+#   uv 0.9.27 .. 0.9.30   MSRV 1.91
+#   uv 0.10.x .. 0.11.19  MSRV 1.92
+#   uv 0.11.20 ..         MSRV 1.94+
+
+# зависимости для сборки разных версии
+# версия           runtime_image	build_image
+DEPS_0.9.0		:= $(GLIBC_IMAGE)	$(RUST_IMAGE)
+DEPS_0.9.15		:= $(GLIBC_IMAGE)	$(RUST_IMAGE)
+DEPS_0.9.26		:= $(GLIBC_IMAGE)	$(RUST_IMAGE)
+# раскомментировать, когда в цепочке rust появится нужная версия
+# DEPS_0.9.30	:= $(GLIBC_IMAGE)	dmp/rust:1.91.0
+# DEPS_0.10.12	:= $(GLIBC_IMAGE)	dmp/rust:1.92.0
+# DEPS_0.11.32	:= $(GLIBC_IMAGE)	dmp/rust:1.95.0
+
+# базовое название для образа
+IMAGE			:= dmp/uv
+FIRST_VERSION	:= $(firstword $(VERSION_CHAIN))
+NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
+
+
+# helper: поиск предыдущей версии в VERSION_CHAIN
+prev_of = $(shell echo "$(VERSION_CHAIN)" | awk -v v='$(1)' '{for(i=1;i<=NF;i++){if($$i==v){print p;exit};p=$$i}}')
+
+
+.PHONY: help
+help:
+	@echo "make:"
+	@echo "  make all        собрать всё"
+	@echo "  make deps       показать версию rust, которую требуют исходники $(VERSION) (для переноса в DEPS)"
+	@echo "  make sources    скачать исходники + завендорить крейты для цепочки вплоть до $(VERSION)"
+	@echo "  make dist       собрать цепочку -dist образов одну за другой до $(VERSION)"
+	@echo "  make build      собрать образ $(IMAGE)"
+	@echo "  make test       проверить образ $(IMAGE): версии, порог glibc, uv lock/venv без сети"
+	@echo "  make glibc      показать максимальную требуемую версию символов GLIBC_ у бинаря"
+	@echo ""
+	@echo "  Цепочка: $(VERSION_CHAIN)"
+	@echo "  Каждая версия собирается тулчейном $(RUST_IMAGE), рантайм — $(GLIBC_IMAGE)."
+	@echo "  sources вендорит крейты (cargo vendor через $(RUST_IMAGE) с сетью) -> оффлайн-сборка."
+	@echo "  Зависимости (runtime_image/build_image) задаются пословно в DEPS_<версия>."
+	@echo "  Потолок версии uv задаёт rustc: см. таблицу MSRV в Makefile."
+	@echo "  Другая версия: make all VERSION=0.9.0"
+	@echo ""
+
+
+.PHONY: debug
+debug:
+	$(info BASE_DIR       = $(BASE_DIR))
+	$(info ARTIFACTS      = $(ARTIFACTS))
+	$(info BUILD_CONTEXT  = $(BUILD_CONTEXT))
+	$(info TEST_DIR       = $(TEST_DIR))
+	$(info VERSION_CHAIN  = $(VERSION_CHAIN))
+	$(info VERSION        = $(VERSION))
+	$(info FIRST_VERSION  = $(FIRST_VERSION))
+	$(info BASE_URL       = $(BASE_URL))
+	$(info RAW_BASE_URL   = $(RAW_BASE_URL))
+	$(info RUST_IMAGE     = $(RUST_IMAGE))
+	$(info PYTHON_IMAGE   = $(PYTHON_IMAGE))
+	$(info CARGO_HOME     = $(CARGO_HOME))
+	$(info CARGO_CONF_MOUNT = $(if $(CARGO_CONF_MOUNT),$(CARGO_CONF_MOUNT),<нет cargo-config.toml>))
+	$(info GLIBC_IMAGE    = $(GLIBC_IMAGE))
+	$(info APT_DEPS       = $(APT_DEPS))
+	$(info NO_CACHE       = $(NO_CACHE))
+	$(info NO_CACHE_TEXT  = $(NO_CACHE_TEXT))
+	$(info IMAGE          = $(IMAGE):$(VERSION))
+	$(info DEPS($(VERSION)) = $(DEPS_$(VERSION)))
+	@true
+
+
+# Показывает версию rust, которую требуют исходники указанной версии: она зашита
+# в Cargo.toml (rust-version, MSRV). Число отсюда переносится руками в
+# DEPS_<версия> выбором build_image. Работает и для версии, которой еще нет
+# в DEPS — манифест берет из завендоренного тарбола или с github
+.PHONY: deps
+deps: deps-$(VERSION)
+
+.ONESHELL:
+deps-%:
+	@current=$(*)
+	set -e
+	mkdir -p $(ARTIFACTS)/src
+	src="$(ARTIFACTS)/src/uv-$$current.tar.gz"
+	if [ -f "$$src" ]; then
+		manifest=$$(tar -xOf "$$src" "uv-$$current/Cargo.toml")
+		toolchain=$$(tar -xOf "$$src" "uv-$$current/rust-toolchain.toml")
+	else
+		manifest=$$(curl -fsSL "$(RAW_BASE_URL)/$$current/Cargo.toml")
+		toolchain=$$(curl -fsSL "$(RAW_BASE_URL)/$$current/rust-toolchain.toml")
+	fi
+	msrv=$$(printf '%s\n' "$$manifest"  | grep -m1 '^rust-version' | tr -d ' "' | cut -d= -f2)
+	pin=$$(printf '%s\n'  "$$toolchain" | grep -m1 'channel'       | tr -d ' "' | cut -d= -f2)
+	echo "uv $$current:"
+	echo "  MSRV (Cargo.toml):    $$msrv  -> нужен dmp/rust не ниже"
+	echo "  rust-toolchain.toml:  $$pin  (пин CI, читает rustup — у нас его нет, cargo файл игнорирует)"
+	# если версия уже есть в DEPS — сверяем с rustc из build-образа
+	set -- $(DEPS_$*)
+	if [ -n "$$2" ]; then
+		rustc_ver=$$(docker run --rm --entrypoint rustc $$2 --version | awk '{print $$2}' | cut -d- -f1)
+		echo "  build_image $$2: rustc $$rustc_ver"
+		lowest=$$(printf '%s\n%s\n' "$$msrv" "$$rustc_ver" | sort -V | head -1)
+		if [ "$$lowest" = "$$msrv" ]; then echo "  OK: rustc $$rustc_ver >= MSRV $$msrv"
+		else echo "  FAIL: rustc $$rustc_ver < MSRV $$msrv — продлите цепочку astra-linux-based/rust"; exit 1; fi
+	fi
+	echo ""
+	echo "строка для DEPS (образы подставьте свои):"
+	printf 'DEPS_%s\t:= $$(GLIBC_IMAGE)\t$$(RUST_IMAGE)\t# MSRV %s\n' "$$current" "$$msrv"
+
+
+# Скачиваем исходники и вендорим крейты для оффлайн-сборки
+.PHONY: sources
+sources: sources-$(VERSION)
+
+.ONESHELL:
+sources-%:
+	@current=$(*)
+	@prev='$(call prev_of,$*)'
+	# вызываем рекурсивно предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
+	set -e
+	set -- $(DEPS_$*)
+	mkdir -p $(ARTIFACTS)/src
+	# уже завендорено — пропускаем
+	[ -f "$(ARTIFACTS)/src/uv-$$current.tar.gz" ] && exit 0 || true
+	# скачиваем исходники, вендорим крейты (rust-образ с сетью), пакуем вместе с vendor/
+	# vendor/ пишется от root -> распаковку, вендоринг, упаковку и уборку делаем ВНУТРИ контейнера
+	tmp=$$(mktemp -d)
+	curl -v -L -o "$$tmp/uv.tar.gz" "$(BASE_URL)/$$current.tar.gz"
+	# .cargo/config.toml в uv уже есть -> дописываем, а не перезаписываем
+	docker run --rm -e CUR=$$current $(CARGO_CONF_MOUNT) -v "$$tmp":/w -v "$(ARTIFACTS)/src":/out --entrypoint sh $$2 -c \
+		'set -e; cd /w; tar -xf uv.tar.gz; cd uv-$$CUR; mkdir -p .cargo; cargo vendor --versioned-dirs --locked vendor >> .cargo/config.toml; rm -rf target .git; du -sh vendor; tar -C /w -czf /out/uv-$$CUR.tar.gz uv-$$CUR; rm -rf /w/uv-$$CUR'
+	rm -rf "$$tmp"
+	ls -lh "$(ARTIFACTS)/src/uv-$$current.tar.gz"
+
+
+# docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)
+.PHONY: dist
+dist: dist-$(VERSION)
+
+.ONESHELL:
+dist-%: sources-%
+	@current=$(*)
+	prev='$(call prev_of,$*)'
+	# рекурсивно собираем предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) dist-$$prev || true
+	set -e
+	set -- $(DEPS_$*)
+	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist \
+		--build-arg RUNTIME_IMAGE=$$1		\
+		--build-arg BUILD_IMAGE=$$2 		\
+		--build-arg UV_VERSION=$$current	\
+		--build-arg APT_DEPS="$(APT_DEPS)"	\
+		--tag $(IMAGE):$$current-dist 		\
+		--progress plain $(BUILD_CONTEXT)
+
+
+# docker build - истоговый образ с установленным ПО (установка из дистрибутива)
+.PHONY: build
+build: build-$(VERSION)
+
+.ONESHELL:
+build-%: dist-%
+	@current=$(*)
+	prev='$(call prev_of,$*)'
+	# рекурсивно собираем предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) build-$$prev || true
+	set -e
+	set -- $(DEPS_$*)
+	docker build -f Dockerfile $(NO_CACHE_TEXT) \
+		--build-arg RUNTIME_IMAGE=$$1		\
+		--build-arg BUILD_IMAGE=$$2			\
+		--build-arg UV_VERSION=$$current	\
+		--build-arg APT_DEPS="$(APT_DEPS)"	\
+		--tag $(IMAGE):$$current			\
+		--progress plain $(BUILD_CONTEXT)
+
+
+# максимальная версия символа GLIBC_, которую требуют бинари — ниже неё не поедут.
+# считается на этапе builder, в рантайме нет binutils
+.PHONY: glibc
+glibc: glibc-$(VERSION)
+
+.ONESHELL:
+glibc-%:
+	@current=$(*)
+	docker run --rm --entrypoint /bin/cat $(IMAGE):$$current /usr/local/share/uv/glibc-floor.txt
+
+
+# тестирование собранного образа
+.PHONY: test
+test: test-$(VERSION)
+
+.ONESHELL:
+test-%: build-%
+	@current=$(*)
+	set -e
+	docker run --rm --entrypoint /bin/bash $(IMAGE):$$current -euc '\
+		echo "== versions ==";							\
+		uv --version;									\
+		uvx --version;									\
+		echo "== linkage ==";							\
+		ldd /usr/local/bin/uv;							\
+		echo "== glibc floor ==";						\
+		cat /usr/local/share/uv/glibc-floor.txt;		\
+		echo "== dirs ==";								\
+		uv cache dir;									\
+		uv python dir;									\
+		uv tool dir;									\
+		echo "== python list ==";						\
+		uv python list | head -3'
+	# в рантайме нет интерпретатора, поэтому uv достается из образа и
+	# запускается в $(PYTHON_IMAGE) с отключенной сетью
+	tmp=$$(mktemp -d)
+	cid=$$(docker create $(IMAGE):$$current)
+	docker cp $$cid:/usr/local/bin/uv "$$tmp/uv"
+	docker rm $$cid > /dev/null
+	docker run --rm --network none -v "$$tmp":/uvbin:ro -v $(TEST_DIR):/test:ro --entrypoint bash $(PYTHON_IMAGE) -euc '\
+		cp -r /test/demo /tmp/demo && cd /tmp/demo;						\
+		echo "== uv lock без сети ==";									\
+		/uvbin/uv lock --offline --python "$$(command -v python3)";		\
+		cat uv.lock;													\
+		echo "== uv venv без сети ==";									\
+		/uvbin/uv venv --offline --python "$$(command -v python3)" /tmp/venv'
+	rm -rf "$$tmp"
+	echo "OK"
+
+
+.PHONY: clean
+clean: clean-$(VERSION)
+
+.ONESHELL:
+clean-%:
+	@current=$(*)
+	@prev='$(call prev_of,$*)'
+	# вызываем рекурсивно предыдущую версию
+	[ -n "$$prev" ] && $(MAKE) clean-$$prev || true
+	set -e
+	mkdir -p $(ARTIFACTS)/src
+	rm -f "$(ARTIFACTS)/src/uv-$$current.tar.gz"
+
+
+.PHONY: all
+all: sources dist build test

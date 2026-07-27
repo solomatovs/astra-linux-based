@@ -1,0 +1,29 @@
+# Пример: njs (JavaScript) в http-контексте.
+# Модуль грузится сниппетом /etc/nginx/modules.d/30-njs.conf (include в nginx.conf).
+# Файл включается внутри http{} (include /etc/nginx/conf.d/*.conf).
+
+# /etc/nginx/js/main.js должен экспортировать объект с обработчиками:
+#   function whoami(r) { r.return(200, r.remoteAddress); }
+#   function upstreamFor(r) { return r.uri.startsWith('/api/') ? 'api_backend' : 'web_backend'; }
+#   export default { whoami, upstreamFor };
+js_import main from /etc/nginx/js/main.js;
+
+# переменная, вычисляемая JS-функцией
+js_set $upstream_name main.upstreamFor;
+
+server {
+    listen 80;
+    server_name js.example.com;
+
+    # обработчик целиком на JS
+    location = /whoami {
+        js_content main.whoami;
+    }
+
+    location / {
+        proxy_pass http://$upstream_name;
+    }
+}
+
+# ngx_stream_js_module грузится отдельно: раскомментируйте load_module
+# в /etc/nginx/modules.d/30-njs.conf и добавьте блок stream{}.

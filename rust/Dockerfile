@@ -48,6 +48,16 @@ RUN tar xzf mrustc-${MRUSTC_VERSION}.tar.gz && rm mrustc-${MRUSTC_VERSION}.tar.g
 COPY artifacts/src/rustc-${RUST_VERSION}-src.tar.gz /build/mrustc-${MRUSTC_VERSION}/
 
 WORKDIR /build/mrustc-${MRUSTC_VERSION}
+
+# mrustc помечает rustc как "<версия>-stable-mrustc" (ломает build.rs у крейтов,
+# читающих rustc --version) и собирает std без LLVM-биткода (ломает lto = "fat")
+RUN set -eux; \
+    grep -q 'CFG_VERSION=$(RUSTC_VERSION)-stable-mrustc' run_rustc/Makefile; \
+    sed -i 's/CFG_VERSION=$(RUSTC_VERSION)-stable-mrustc/CFG_VERSION=$(RUSTC_VERSION)/' run_rustc/Makefile; \
+    grep -q 'RUSTFLAGS="-Z force-unstable-if-unmarked' run_rustc/Makefile; \
+    sed -i 's/RUSTFLAGS="-Z force-unstable-if-unmarked/RUSTFLAGS="-C embed-bitcode=yes -Z force-unstable-if-unmarked/' run_rustc/Makefile; \
+    grep -n 'CFG_VERSION=\|RUSTFLAGS=' run_rustc/Makefile
+
 # взято из из build-<ver>.sh
 RUN set -eux; \
     MINOR="$(echo ${RUST_VERSION} | cut -d. -f1-2)"; \
@@ -60,7 +70,13 @@ RUN set -eux; \
     ./output-${RUST_VERSION}/rustc --version; \
     ./output-${RUST_VERSION}/cargo --version; \
     make -C run_rustc -j"$(nproc)" RUSTC_VERSION=${RUST_VERSION}; \
-    run_rustc/output-${RUST_VERSION}/prefix/bin/rustc --version
+    PFX="$(pwd)/run_rustc/output-${RUST_VERSION}/prefix"; \
+    $PFX/bin/rustc --version; \
+    test "$($PFX/bin/rustc --version)" = "rustc ${RUST_VERSION}"; \
+    mkdir /tmp/bc && cd /tmp/bc \
+        && ar x $PFX/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd.rlib \
+        && objdump -h *.o | grep -q llvmbc; \
+    cd /; rm -rf /tmp/bc
 
 # install toolchain (rustc+cargo+std sysroot)
 RUN set -eux; \

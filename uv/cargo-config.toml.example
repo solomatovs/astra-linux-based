@@ -1,0 +1,30 @@
+# ============================================================
+# Cargo config для вендоринга в закрытом контуре.
+# Реальный файл — cargo-config.toml рядом с Makefile, монтируется
+# в $CARGO_HOME/config.toml контейнера на шаге make sources.
+# По умолчанию файла нет — cargo ходит в crates.io напрямую.
+#
+# Прокси (заменяет docker run --network host):
+#
+#   [http]
+#   proxy = "http://proxy.internal.example.com:3128"
+#   check-revoke = false
+#
+#   [https]
+#   proxy = "http://proxy.internal.example.com:3128"
+#
+# Или замена источника на nexus:
+#
+#   [source.crates-io]
+#   replace-with = "nexus"
+#
+#   [source.nexus]
+#   registry = "sparse+https://nexus.internal.example.com/repository/cargo/"
+#
+# Свой CA:
+#
+#   [http]
+#   cainfo = "/usr/local/share/ca-certificates/ca-chain.crt"
+#
+# Проверить, что монтирование подхватилось: make debug
+# ============================================================
