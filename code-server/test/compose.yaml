@@ -1,0 +1,13 @@
+# Фикстура для проверки docker cli-плагинов без демона:
+# docker-compose разбирает её в `config`, docker-buildx — в `bake --print`
+# (bake читает compose-файлы), поэтому секции build достаточно обеих утилит.
+services:
+  app:
+    image: dmp/code-server-test:1
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FOO: bar
+    environment:
+      BAZ: qux

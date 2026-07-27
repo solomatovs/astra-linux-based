@@ -2,9 +2,13 @@
 ARG RUNTIME_IMAGE=dmp/nodejs:22.22.1
 ARG GCC_IMAGE=dmp/gcc:12.4.0-dist
 ARG PYTHON_IMAGE=dmp/python:3.10-dist
+ARG BUILDX_IMAGE=dmp/docker-buildx:0.30.0-dist
+ARG COMPOSE_IMAGE=dmp/docker-compose:2.38.2-dist
 
 FROM ${GCC_IMAGE}       AS gcc
 FROM ${PYTHON_IMAGE}    AS python
+FROM ${BUILDX_IMAGE}    AS buildx
+FROM ${COMPOSE_IMAGE}   AS compose
 FROM ${RUNTIME_IMAGE}   AS base
 FROM base AS builder
 
@@ -164,10 +168,19 @@ FROM base AS runtime
 
 ARG CS_PATH=/opt/code-server
 ARG GCC_PATH=/opt/gcc
+ARG BUILDX_PATH=/opt/docker-buildx
+ARG COMPOSE_PATH=/opt/docker-compose
 ARG CS_UID=1000
 ARG CS_GID=1000
 
 COPY --from=dist ${CS_PATH} /
+
+# docker cli-плагины: статические бинарники в /usr/local/bin плюс симлинки в
+# /usr/local/lib/docker/cli-plugins, откуда их подхватывает docker cli
+# (`docker buildx`, `docker compose`). сам docker cli в образ не кладется —
+# он пробрасывается снаружи вместе с сокетом
+COPY --from=buildx  ${BUILDX_PATH}  /
+COPY --from=compose ${COMPOSE_PATH} /
 
 # нативные модули собраны gcc 12 — libstdc++/libgcc берём из того же тулчейна
 COPY --from=gcc ${GCC_PATH}/usr/local/lib64/libstdc++.so.6* ${GCC_PATH}/usr/local/lib64/libgcc_s.so.1* /usr/local/lib64/

@@ -32,6 +32,11 @@ NODE_IMAGE			?= dmp/nodejs:22.22.1
 GCC_IMAGE			?= dmp/gcc:12.4.0-dist
 PYTHON_IMAGE		?= dmp/python:3.10-dist
 
+# docker cli-плагины, кладутся в рантайм-образ как есть (статические бинарники).
+# от версии code-server не зависят, поэтому не в DEPS
+BUILDX_IMAGE		?= dmp/docker-buildx:0.30.0-dist
+COMPOSE_IMAGE		?= dmp/docker-compose:2.38.2-dist
+
 # зависимости для сборки разных версии
 # vscode_sha:  коммит сабмодуля lib/vscode
 # ripgrep:     тег prebuilt-архива из postinstall.js пакета @vscode/ripgrep
@@ -89,6 +94,8 @@ debug:
 	$(info VSCODE_URL     = $(VSCODE_URL))
 	$(info RIPGREP_URL    = $(RIPGREP_URL))
 	$(info ELECTRON_URL   = $(ELECTRON_URL))
+	$(info BUILDX_IMAGE   = $(BUILDX_IMAGE))
+	$(info COMPOSE_IMAGE  = $(COMPOSE_IMAGE))
 	$(info NO_CACHE       = $(NO_CACHE))
 	$(info NO_CACHE_TEXT  = $(NO_CACHE_TEXT))
 	$(info IMAGE          = $(IMAGE):$(VERSION))
@@ -255,6 +262,8 @@ build-%: dist-%
 		--build-arg RIPGREP_ARCHIVE=ripgrep-$$5-$$6.tar.gz			\
 		--build-arg ELECTRON_TARGET=$$7								\
 		--build-arg NODE_TARGET=$$8									\
+		--build-arg BUILDX_IMAGE=$(BUILDX_IMAGE)					\
+		--build-arg COMPOSE_IMAGE=$(COMPOSE_IMAGE)					\
 		--tag $(IMAGE):$$current									\
 		--tag $(IMAGE):$$major										\
 		--progress plain $(BUILD_CONTEXT)
@@ -273,8 +282,21 @@ test-%: build-%
 		code-server --version; 					\
 		git --version; 							\
 		ssh -V; 								\
+		docker-buildx version; 					\
+		docker-compose version; 				\
 		echo "== which =="; 					\
 		command -v node; command -v code-server; \
+		echo "== docker cli-плагины =="; 		\
+		ls -l /usr/local/lib/docker/cli-plugins; \
+		echo "== плагины работают (без демона: discovery + разбор конфигов) =="; \
+		/usr/local/lib/docker/cli-plugins/docker-buildx docker-cli-plugin-metadata  | grep -q "\"Vendor\""; \
+		echo "  ok    docker buildx  — metadata для docker cli"; \
+		/usr/local/lib/docker/cli-plugins/docker-compose docker-cli-plugin-metadata | grep -q "\"Vendor\""; \
+		echo "  ok    docker compose — metadata для docker cli"; \
+		docker-compose -f /test/compose.yaml config | grep -q "dmp/code-server-test:1"; \
+		echo "  ok    docker-compose config"; 	\
+		(cd /test && docker-buildx bake -f compose.yaml --print 2>/dev/null) | grep -q "dmp/code-server-test:1"; \
+		echo "  ok    docker-buildx bake --print"; \
 		echo "== whoami (должен быть непривилегированный coder) =="; \
 		id; 									\
 		echo "== ripgrep (подложен из artifacts, не скачан с github) =="; \
