@@ -15,7 +15,11 @@ VERSION_CHAIN		?= 0.30.0
 # целевая версия сборки. по умолчанию берется последняя версия
 VERSION      		?= $(lastword $(VERSION_CHAIN))
 # базовый url адрес для скачивания исходников собираемых в Dockerfile
-BASE_URL			?= https://codeload.github.com/eclipse-openvsx/openvsx/tar.gz/refs/tags
+# форк solomatovs — свой GitHub с LDAP-патчами
+FORK				?= solomatovs/openvsx
+BASE_URL			?= https://codeload.github.com/$(FORK)/tar.gz/refs/tags
+# имя тега на GitHub (форк solomatovs использует v0.30.0-ldap)
+TAG_NAME			?= v0.30.0-ldap
 # выполнять ли сброс кэша: docker build --no-cache
 NO_CACHE			?= 0
 
@@ -96,7 +100,7 @@ sources-%:
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	[ -f "$(ARTIFACTS)/src/openvsx-$$current.tar.gz" ] || curl -fvL -o "$(ARTIFACTS)/src/openvsx-$$current.tar.gz" "$(BASE_URL)/v$$current"
+	[ -f "$(ARTIFACTS)/src/openvsx-$$current.tar.gz" ] || curl -fvL -o "$(ARTIFACTS)/src/openvsx-$$current.tar.gz" "$(BASE_URL)/$(TAG_NAME)"
 
 
 # Показывает версии зависимостей, которые требуют исходники указанной версии:
@@ -112,7 +116,7 @@ deps-%:
 	set -e
 	mkdir -p $(ARTIFACTS)/src
 	src='$(ARTIFACTS)/src/openvsx-'"$$current"'.tar.gz'
-	[ -f "$$src" ] || curl -fsL -o "$$src" "$(BASE_URL)/v$$current"
+	[ -f "$$src" ] || curl -fsL -o "$$src" "$(BASE_URL)/$(TAG_NAME)"
 	java=$$(tar -xzOf $$src openvsx-$$current/server/build.gradle | sed -n "s/^ *java: '\(.*\)',/\1/p")
 	[ -n "$$java" ] || java=$$(tar -xzOf $$src openvsx-$$current/server/gradle/libs.versions.toml 2>/dev/null | sed -n 's/^java *= *"\(.*\)"/\1/p')
 	echo "openvsx $$current:"

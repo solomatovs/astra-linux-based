@@ -145,3 +145,15 @@ ovsx:
   storage:
     local:
       directory: /home/openvsx/storage
+  # LDAP authentication (код в форке solomatovs/openvsx, ветка v0.30.0-ldap)
+  dmp:
+    ldap:
+      enabled: false
+      url: ldap://ldap:389
+      base-dn: ""
+      user-filter: (uid={0})
+      manager-dn: ""
+      manager-password: ""
+      attr-uid: uid
+      attr-cn: cn
+      attr-mail: mail
