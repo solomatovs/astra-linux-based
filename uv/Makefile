@@ -19,37 +19,25 @@ RAW_BASE_URL		?= https://raw.githubusercontent.com/astral-sh/uv
 NO_CACHE			?= 0
 
 GLIBC_IMAGE			?= dmp/glibc:2.28
-# rust-тулчейн — им и собираем, и вендорим крейты
 RUST_IMAGE			?= dmp/rust:1.90.0
-# интерпретатор для функциональной части make test, в рантайме его нет
+# интерпретатор для make test, в рантайме его нет
 PYTHON_IMAGE		?= dmp/python:3.11
 APT_DEPS			?=
 
 # CARGO_HOME внутри $(RUST_IMAGE)
 CARGO_HOME			?= /usr/local/cargo
-# cargo-config закрытого контура (proxy/nexus) для вендоринга.
-# монтируется в CARGO_HOME, если файл есть; см. cargo-config.toml.example
+# cargo-config закрытого контура, монтируется если файл есть
 CARGO_CONF_MOUNT	:= $(if $(wildcard $(BASE_DIR)/cargo-config.toml),-v "$(BASE_DIR)/cargo-config.toml":$(CARGO_HOME)/config.toml:ro,)
 
-# версия uv ограничена сверху версией rustc: uv объявляет MSRV в Cargo.toml,
-# и он растёт быстрее, чем цепочка соседнего проекта rust.
-# узнать значение для новой версии: make deps VERSION=<версия>
-#
-#   uv 0.9.0  .. 0.9.8    MSRV 1.88
-#   uv 0.9.9  .. 0.9.26   MSRV 1.89   <- потолок текущего контура
-#   uv 0.9.27 .. 0.9.30   MSRV 1.91
-#   uv 0.10.x .. 0.11.19  MSRV 1.92
-#   uv 0.11.20 ..         MSRV 1.94+
-
+# build_image задаёт MSRV из Cargo.toml исходников: make deps VERSION=<версия>
 # зависимости для сборки разных версии
-# версия           runtime_image	build_image
-DEPS_0.9.0		:= $(GLIBC_IMAGE)	$(RUST_IMAGE)
-DEPS_0.9.15		:= $(GLIBC_IMAGE)	$(RUST_IMAGE)
-DEPS_0.9.26		:= $(GLIBC_IMAGE)	$(RUST_IMAGE)
-# раскомментировать, когда в цепочке rust появится нужная версия
-# DEPS_0.9.30	:= $(GLIBC_IMAGE)	dmp/rust:1.91.0
-# DEPS_0.10.12	:= $(GLIBC_IMAGE)	dmp/rust:1.92.0
-# DEPS_0.11.32	:= $(GLIBC_IMAGE)	dmp/rust:1.95.0
+# версия           runtime_image	build_image			MSRV
+DEPS_0.9.0		:= $(GLIBC_IMAGE)	dmp/rust:1.90.0		# 1.88
+DEPS_0.9.15		:= $(GLIBC_IMAGE)	dmp/rust:1.90.0		# 1.89
+DEPS_0.9.26		:= $(GLIBC_IMAGE)	dmp/rust:1.90.0		# 1.89
+DEPS_0.9.30		:= $(GLIBC_IMAGE)	dmp/rust:1.91.0		# 1.91
+DEPS_0.10.12	:= $(GLIBC_IMAGE)	dmp/rust:1.92.0		# 1.92
+DEPS_0.11.32	:= $(GLIBC_IMAGE)	dmp/rust:1.95.0		# 1.95
 
 # базовое название для образа
 IMAGE			:= dmp/uv
