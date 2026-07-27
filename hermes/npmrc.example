@@ -1,0 +1,19 @@
+# ============================================================
+# npm config для nodejs runtime (Nexus / закрытый контур).
+#
+# По умолчанию файл без активных строк — npm ходит в registry.npmjs.org.
+# Скопируйте этот файл в artifacts/npmrc и правьте его.
+# Подхватывается как глобальный конфиг npm: /usr/local/etc/npmrc.
+#
+# Для Nexus раскомментируйте и подставьте свой адрес:
+#
+#   registry=https://nexus.example.ru/repository/npm-group/
+#   //nexus.example.ru/repository/npm-group/:_auth=BASE64(user:pass)
+#   always-auth=true
+#   cafile=/etc/ssl/certs/ca-certificates.crt
+#
+# CA-цепочка отдельно НЕ кладётся: корпоративный CA запекается в
+# базовый dmp/glibc:2.28 (glibc/2.28/artifacts/ca-chain.crt) и доступен
+# как /etc/ssl/certs/ca-certificates.crt. Node видит его только через
+# NODE_EXTRA_CA_CERTS (выставляется в Dockerfile).
+# ============================================================
