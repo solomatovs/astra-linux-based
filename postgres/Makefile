@@ -1,6 +1,8 @@
 BASE_DIR      	?= $(abspath .)
-ARTIFACTS     	?= $(BASE_DIR)/artifacts
+ARTIFACTS     	?= $(abspath $(BASE_DIR)/../../ci-artifacts/postgres)
 BUILD_CONTEXT 	?= $(BASE_DIR)
+# рабочая копия $(ARTIFACTS) внутри контекста сборки (хардлинки, см. artifacts-link)
+LINKED_ARTIFACTS ?= $(BUILD_CONTEXT)/artifacts
 TEST_DIR		?= $(BASE_DIR)/test
 
 
@@ -93,6 +95,7 @@ debug:
 	$(info BASE_DIR         = $(BASE_DIR))
 	$(info ARTIFACTS        = $(ARTIFACTS))
 	$(info BUILD_CONTEXT    = $(BUILD_CONTEXT))
+	$(info LINKED_ARTIFACTS = $(LINKED_ARTIFACTS))
 	$(info TEST_DIR         = $(TEST_DIR))
 	$(info VERSIONS         = $(VERSIONS))
 	$(info VERSION          = $(VERSION))
@@ -105,6 +108,26 @@ debug:
 	$(info DEPS($(VERSION)) = $(DEPS_$(VERSION)))
 	$(info CONF($(VERSION)) = $(call pg_extra,$(VERSION)))
 	@true
+
+
+# docker build видит только свой контекст, поэтому перед сборкой подкладываем
+# $(ARTIFACTS) в $(LINKED_ARTIFACTS) хардлинками: места не занимает, копий нет
+.PHONY: artifacts-link
+artifacts-link:
+	@set -e
+	if [ ! -d "$(ARTIFACTS)" ]; then
+		if [ -n "$$(ls -A '$(LINKED_ARTIFACTS)' 2>/dev/null)" ]; then
+			echo "  ! $(ARTIFACTS) не найден, а $(LINKED_ARTIFACTS) не пуст" >&2
+			echo "  ! перенеси артефакты в ci-artifacts, тут только рабочая копия" >&2
+			exit 1
+		fi
+		mkdir -p "$(ARTIFACTS)"
+	fi
+	rm -rf "$(LINKED_ARTIFACTS)"
+	cp -al "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)" 2>/dev/null || {
+		rm -rf "$(LINKED_ARTIFACTS)"
+		cp -a "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)"
+	}
 
 
 # Скачиваем исходники postgres
@@ -133,6 +156,7 @@ dist-%: sources-%
 	set -- $(DEPS_$*)
 	runtime=$$1; build=$$2
 	short=$${current%.*}
+	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist	\
 		--build-arg RUNTIME_IMAGE=$$runtime 					\
 		--build-arg BUILD_IMAGE=$$build 						\
@@ -156,6 +180,7 @@ build-%: dist-%
 	set -- $(DEPS_$*)
 	runtime=$$1; build=$$2
 	short=$${current%.*}
+	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT) 				\
 		--build-arg RUNTIME_IMAGE=$$runtime 					\
 		--build-arg BUILD_IMAGE=$$build 						\
@@ -181,6 +206,7 @@ test-%: build-%
 
 .PHONY: clean
 clean: clean-$(VERSION)
+	rm -rf "$(LINKED_ARTIFACTS)"
 
 .ONESHELL:
 clean-%:

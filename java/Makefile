@@ -1,6 +1,8 @@
 BASE_DIR      	?= $(abspath .)
-ARTIFACTS     	?= $(BASE_DIR)/artifacts
+ARTIFACTS     	?= $(abspath $(BASE_DIR)/../../ci-artifacts/java)
 BUILD_CONTEXT 	?= $(BASE_DIR)
+# рабочая копия $(ARTIFACTS) внутри контекста сборки (хардлинки, см. artifacts-link)
+LINKED_ARTIFACTS ?= $(BUILD_CONTEXT)/artifacts
 TEST_DIR		?= $(BASE_DIR)/test
 
 # путь, по которому дистрибутив лежит внутри -dist образа (JAVA_PATH в Dockerfile)
@@ -105,6 +107,7 @@ debug:
 	$(info ARTIFACTS      = $(ARTIFACTS))
 	$(info JAVA_PATH      = $(JAVA_PATH))
 	$(info BUILD_CONTEXT  = $(BUILD_CONTEXT))
+	$(info LINKED_ARTIFACTS = $(LINKED_ARTIFACTS))
 	$(info TEST_DIR       = $(TEST_DIR))
 	$(info VERSION_CHAIN  = $(VERSION_CHAIN))
 	$(info TARGET_VERSION = $(TARGET_VERSIONS))
@@ -121,6 +124,26 @@ debug:
 	$(info DEPS($(VERSION)) = $(DEPS_$(VERSION)))
 	$(info FULL($(VERSION)) = $(call full_of,$(word 5,$(DEPS_$(VERSION)))))
 	@true
+
+
+# docker build видит только свой контекст, поэтому перед сборкой подкладываем
+# $(ARTIFACTS) в $(LINKED_ARTIFACTS) хардлинками: места не занимает, копий нет
+.PHONY: artifacts-link
+artifacts-link:
+	@set -e
+	if [ ! -d "$(ARTIFACTS)" ]; then
+		if [ -n "$$(ls -A '$(LINKED_ARTIFACTS)' 2>/dev/null)" ]; then
+			echo "  ! $(ARTIFACTS) не найден, а $(LINKED_ARTIFACTS) не пуст" >&2
+			echo "  ! перенеси артефакты в ci-artifacts, тут только рабочая копия" >&2
+			exit 1
+		fi
+		mkdir -p "$(ARTIFACTS)"
+	fi
+	rm -rf "$(LINKED_ARTIFACTS)"
+	cp -al "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)" 2>/dev/null || {
+		rm -rf "$(LINKED_ARTIFACTS)"
+		cp -a "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)"
+	}
 
 
 # Скачиваем зависимости для сборки дистрибутива
@@ -156,6 +179,7 @@ dist-%: sources-%
 	set -e
 	set -- $(DEPS_$*)
 	full='$(call full_of,$(word 5,$(DEPS_$*)))'
+	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist		\
 		--build-arg RUNTIME_IMAGE=$$1								\
 		--build-arg BUILD_IMAGE=$$2									\
@@ -204,6 +228,7 @@ build-%: dist-%
 	set -e
 	set -- $(DEPS_$*)
 	full='$(call full_of,$(word 5,$(DEPS_$*)))'
+	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT)						\
 		--build-arg RUNTIME_IMAGE=$$1								\
 		--build-arg BUILD_IMAGE=$$2									\
@@ -252,6 +277,7 @@ targets:
 
 .PHONY: clean
 clean: clean-$(VERSION)
+	rm -rf "$(LINKED_ARTIFACTS)"
 
 .ONESHELL:
 clean-%:

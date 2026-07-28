@@ -10,7 +10,7 @@
 |---------|------------|
 | `make help` | список команд (по умолчанию) |
 | `make deps` | показать MSRV исходников и сверить с rustc из build-образа |
-| `make sources` | скачать исходники и завендорить крейты в `artifacts/src/` |
+| `make sources` | скачать исходники и завендорить крейты в `$(ARTIFACTS)/src/` |
 | `make dist` | собрать `dmp/uv:<версия>-dist` |
 | `make build` | собрать `dmp/uv:<версия>` |
 | `make test` | uv/uvx --version, порог glibc, `uv lock` без сети |
@@ -20,7 +20,7 @@
 
 Сеть нужна только на шаге `make sources`: он качает тарбол релиза, прогоняет
 `cargo vendor --versioned-dirs --locked` внутри `dmp/rust` и пакует исходники
-вместе с `vendor/` в `artifacts/src/uv-<версия>.tar.gz` (~103 МБ, сам `vendor/` — 835 МБ).
+вместе с `vendor/` в `$(ARTIFACTS)/src/uv-<версия>.tar.gz` (~103 МБ, сам `vendor/` — 835 МБ).
 Контейнер вендоринга работает на обычной bridge-сети; если нужен прокси — он задаётся
 монтируемым `cargo-config.toml` (см. ниже), а не `--network host`.
 
@@ -85,7 +85,7 @@ uv объявляет MSRV в `Cargo.toml`, и растёт он быстрее,
 файл есть, проверить — `make debug`.
 
 **Рантайм** — `uv-config.toml.example`. Реальный файл кладётся в
-`artifacts/uv-config.toml` и попадает в образ как `/etc/uv/uv.toml` (index на nexus,
+`$(ARTIFACTS)/uv-config.toml` и попадает в образ как `/etc/uv/uv.toml` (index на nexus,
 `native-tls`, зеркало для `uv python install`).
 
 По умолчанию нет ни того, ни другого.

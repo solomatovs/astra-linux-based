@@ -1,6 +1,8 @@
 BASE_DIR      	?= $(abspath .)
-ARTIFACTS     	?= $(BASE_DIR)/artifacts
+ARTIFACTS     	?= $(abspath $(BASE_DIR)/../../ci-artifacts/pg-probackup)
 BUILD_CONTEXT 	?= $(BASE_DIR)
+# рабочая копия $(ARTIFACTS) внутри контекста сборки (хардлинки, см. artifacts-link)
+LINKED_ARTIFACTS ?= $(BUILD_CONTEXT)/artifacts
 TEST_DIR		?= $(BASE_DIR)/test
 
 
@@ -36,6 +38,26 @@ help:
 	@echo ""
 
 
+# docker build видит только свой контекст, поэтому перед сборкой подкладываем
+# $(ARTIFACTS) в $(LINKED_ARTIFACTS) хардлинками: места не занимает, копий нет
+.PHONY: artifacts-link
+artifacts-link:
+	@set -e
+	if [ ! -d "$(ARTIFACTS)" ]; then
+		if [ -n "$$(ls -A '$(LINKED_ARTIFACTS)' 2>/dev/null)" ]; then
+			echo "  ! $(ARTIFACTS) не найден, а $(LINKED_ARTIFACTS) не пуст" >&2
+			echo "  ! перенеси артефакты в ci-artifacts, тут только рабочая копия" >&2
+			exit 1
+		fi
+		mkdir -p "$(ARTIFACTS)"
+	fi
+	rm -rf "$(LINKED_ARTIFACTS)"
+	cp -al "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)" 2>/dev/null || {
+		rm -rf "$(LINKED_ARTIFACTS)"
+		cp -a "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)"
+	}
+
+
 # Скачиваем исходники pg_probackup и postgres
 .PHONY: sources
 sources: sources-$(VERSION)
@@ -59,6 +81,7 @@ build: build-$(VERSION)
 build-%: sources-%
 	@current=$(*)
 	set -e
+	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT)	\
 		--build-arg PG_VERSION=$$current 		\
 		--build-arg PROBACKUP_VERSION=$(PROBACKUP_VER) \

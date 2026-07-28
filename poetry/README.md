@@ -44,7 +44,7 @@ build-образ с `cc` и `rustc` (в `dmp/python` компилятора не
 
 Сеть нужна ровно на одном шаге — `make sources`. Он поднимает контейнер
 `dmp/python` (обычная docker-сеть, ничего особенного ему не нужно) и кладёт в
-`artifacts/src/poetry-<версия>-python<тег>.tar.gz` (17–24 МБ):
+`$(ARTIFACTS)/src/poetry-<версия>-python<тег>.tar.gz` (17–24 МБ):
 
 * `wheelhouse/*.whl` — всё дерево зависимостей, посчитанное `pip wheel`
   (для 2.4.1 это 45 колёс);

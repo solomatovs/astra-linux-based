@@ -1,6 +1,8 @@
 BASE_DIR      	?= $(abspath .)
-ARTIFACTS     	?= $(BASE_DIR)/artifacts
+ARTIFACTS     	?= $(abspath $(BASE_DIR)/../../../ci-artifacts/nginx-ext/auth-ldap)
 BUILD_CONTEXT 	?= $(BASE_DIR)
+# рабочая копия $(ARTIFACTS) внутри контекста сборки (хардлинки, см. artifacts-link)
+LINKED_ARTIFACTS ?= $(BUILD_CONTEXT)/artifacts
 TEST_DIR		?= $(BASE_DIR)/test
 
 
@@ -61,6 +63,26 @@ debug:
 
 
 
+# docker build видит только свой контекст, поэтому перед сборкой подкладываем
+# $(ARTIFACTS) в $(LINKED_ARTIFACTS) хардлинками: места не занимает, копий нет
+.PHONY: artifacts-link
+artifacts-link:
+	@set -e
+	if [ ! -d "$(ARTIFACTS)" ]; then
+		if [ -n "$$(ls -A '$(LINKED_ARTIFACTS)' 2>/dev/null)" ]; then
+			echo "  ! $(ARTIFACTS) не найден, а $(LINKED_ARTIFACTS) не пуст" >&2
+			echo "  ! перенеси артефакты в ci-artifacts, тут только рабочая копия" >&2
+			exit 1
+		fi
+		mkdir -p "$(ARTIFACTS)"
+	fi
+	rm -rf "$(LINKED_ARTIFACTS)"
+	cp -al "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)" 2>/dev/null || {
+		rm -rf "$(LINKED_ARTIFACTS)"
+		cp -a "$(ARTIFACTS)" "$(LINKED_ARTIFACTS)"
+	}
+
+
 # Скачиваем исходники модуля и его зависимостей
 .PHONY: sources
 sources:
@@ -79,6 +101,7 @@ build: build-$(VERSION)
 .ONESHELL:
 build-%: sources
 	@set -e
+	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT)					\
 		--build-arg NGINX_VERSION=$*							\
 		--build-arg BASE_IMAGE=$(call base_image,$*)			\
@@ -109,6 +132,7 @@ check-%:
 clean:
 	rm -f "$(ARTIFACTS)/src/nginx-auth-ldap-$(MODULE_REF).tar.gz" \
 		"$(ARTIFACTS)/src/openldap-$(OPENLDAP_VERSION).tgz"
+	rm -rf "$(LINKED_ARTIFACTS)"
 
 
 .PHONY: all
