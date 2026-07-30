@@ -10,24 +10,48 @@ TEST_DIR		?= $(BASE_DIR)/test
 
 # список версий, которые поддерживает сборщик
 # версии собираются одна за другой, строго по цепочке
-VERSION_CHAIN		?= 1.90.0
+VERSION_CHAIN		?= 1.90.0 1.91.0 1.92.0 1.93.0 1.94.0 1.95.0
 # целевая версия сборки. по умолчанию берется последняя версия
 # соответственно для ее сборки потребуется собрать все предыдущие версии в цепочки
 VERSION      		?= $(lastword $(VERSION_CHAIN))
 # базовый url адрес для скачивания исходников собираемых в Dockerfile
 RUST_SRC_BASE		?= https://static.rust-lang.org/dist
 MRUSTC_SRC_BASE		?= https://github.com/thepowersgang/mrustc/archive/refs/tags
+NINJA_SRC_BASE		?= https://github.com/ninja-build/ninja/archive/refs/tags
+# ninja нужен только ветке bootstrap: им собирается llvm из состава rustc
+NINJA_VERSION		?= 1.11.1
 APT_DEPS			?= patch curl git zlib1g-dev libssl-dev pkg-config
 # выполнять ли сброс кэша: docker build --no-cache
 NO_CACHE			?= 0
+# сколько rustc гонять параллельно на этапе run_rustc первого звена (mrustc).
+# пусто = min(nproc, 8): rustc там собран самим mrustc, неоптимизирован и жрёт
+# память, при -j nproc на машине с малым объёмом RAM на ядро падает по SIGABRT
+MRUSTC_JOBS			?=
+# пересобирать звено цепочки, даже если образ с таким тегом уже есть.
+# по умолчанию готовые звенья пропускаются: цепочка длинная, каждое звено — часы,
+# и любая правка Dockerfile иначе тянет за собой пересборку всех предыдущих
+FORCE				?= 0
 
 GCC_IMAGE			?= dmp/gcc:8.5.0
+# llvm 21+ (идёт в составе rustc 1.91+) старым gcc уже не собирается
+GCC_NEW_IMAGE		?= dmp/gcc:14.2.0
 CMAKE_IMAGE			?= dmp/cmake:3.27.9-dist
 PYTHON_IMAGE		?= dmp/python:3.10-dist
 
+# Первое звено цепочки поднимает mrustc (компилятора rust ещё нет) — это сутки
+# сборки. Дальше обычный self-hosting: rustc N-1 собирает rustc N через x.py,
+# build_image — предыдущий -dist образ, из него берётся stage0. Прочерк в поле
+# mrustc и означает «эта версия собирается bootstrap-ом».
+# Версии пропускать нельзя: stage0 должен быть ровно предыдущим минором,
+# поэтому 1.93.0 в цепочке есть, хотя сам по себе никому не нужен.
 # зависимости для сборки разных версии
-# версия       runtime_image   	build_image     cmake_image     python_image    mrustc
-DEPS_1.90.0	:= $(GCC_IMAGE)		$(GCC_IMAGE)	$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	0.12.0
+# версия       runtime_image   		build_image     		cmake_image     python_image    mrustc
+DEPS_1.90.0	:= $(GCC_IMAGE)			$(GCC_IMAGE)			$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	0.12.0
+DEPS_1.91.0	:= $(GCC_NEW_IMAGE)		dmp/rust:1.90.0-dist	$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	-
+DEPS_1.92.0	:= $(GCC_NEW_IMAGE)		dmp/rust:1.91.0-dist	$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	-
+DEPS_1.93.0	:= $(GCC_NEW_IMAGE)		dmp/rust:1.92.0-dist	$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	-
+DEPS_1.94.0	:= $(GCC_NEW_IMAGE)		dmp/rust:1.93.0-dist	$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	-
+DEPS_1.95.0	:= $(GCC_NEW_IMAGE)		dmp/rust:1.94.0-dist	$(CMAKE_IMAGE)	$(PYTHON_IMAGE)	-
 
 # базовое название для образа
 IMAGE			:= dmp/rust
@@ -49,8 +73,12 @@ help:
 	@echo "  make test       проверить тулчейн: собрать и запустить test/hello.rs в образе $(IMAGE)"
 	@echo ""
 	@echo "  Цепочка: $(VERSION_CHAIN)"
-	@echo "  rustc собирается ИЗ ИСХОДНИКОВ через mrustc (C++), без бинарного rustc."
-	@echo "  Зависимости (cmake/python/mrustc) задаются пословно в DEPS_<версия>."
+	@echo "  Первая версия цепочки собирается ИЗ ИСХОДНИКОВ через mrustc (C++), без бинарного rustc."
+	@echo "  Остальные — обычным bootstrap-ом (x.py): rustc N-1 из предыдущего -dist образа собирает rustc N."
+	@echo "  Зависимости (cmake/python/mrustc) задаются пословно в DEPS_<версия>, прочерк в поле mrustc = bootstrap."
+	@echo "  Уже собранные звенья пропускаются, пересобрать: FORCE=1"
+	@echo "  Первое звено проще перенести с другой машины (docker save/load), чем пересобирать."
+	@echo "  Если mrustc-этап падает по SIGABRT (мало памяти) — уменьшить: MRUSTC_JOBS=2"
 	@echo "  Другая версия: make all VERSION=1.90.0"
 	@echo ""
 
@@ -67,8 +95,12 @@ debug:
 	$(info FIRST_VERSION  = $(FIRST_VERSION))
 	$(info RUST_SRC_BASE  = $(RUST_SRC_BASE))
 	$(info MRUSTC_SRC_BASE = $(MRUSTC_SRC_BASE))
+	$(info NINJA_SRC_BASE = $(NINJA_SRC_BASE))
+	$(info NINJA_VERSION  = $(NINJA_VERSION))
 	$(info APT_DEPS       = $(APT_DEPS))
 	$(info NO_CACHE       = $(NO_CACHE))
+	$(info FORCE          = $(FORCE))
+	$(info MRUSTC_JOBS    = $(MRUSTC_JOBS))
 	$(info NO_CACHE_TEXT  = $(NO_CACHE_TEXT))
 	$(info IMAGE          = $(IMAGE):$(VERSION))
 	$(info DEPS($(VERSION)) = $(DEPS_$(VERSION)))
@@ -108,7 +140,12 @@ sources-%:
 	set -e
 	set -- $(DEPS_$*)
 	mkdir -p $(ARTIFACTS)/src
-	[ -f "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" ] || curl -v -o "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" "$(MRUSTC_SRC_BASE)/v$$5.tar.gz"
+	if [ "$$5" = "-" ]; then
+		# ветка bootstrap: вместо mrustc нужен ninja, им собирается llvm
+		[ -f "$(ARTIFACTS)/src/ninja-$(NINJA_VERSION).tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/ninja-$(NINJA_VERSION).tar.gz" "$(NINJA_SRC_BASE)/v$(NINJA_VERSION).tar.gz"
+	else
+		[ -f "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" "$(MRUSTC_SRC_BASE)/v$$5.tar.gz"
+	fi
 	[ -f "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz" ] || curl -v -o "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz" "$(RUST_SRC_BASE)/rustc-$$current-src.tar.gz"
 
 
@@ -124,6 +161,11 @@ dist-%: sources-%
 	[ -n "$$prev" ] && $(MAKE) dist-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
+	if [ "$$5" = "-" ]; then mode=bootstrap; else mode=mrustc; fi
+	if [ "$(FORCE)" != "1" ] && docker image inspect $(IMAGE):$$current-dist >/dev/null 2>&1; then
+		echo "  = $(IMAGE):$$current-dist уже собран, пропускаем (FORCE=1 — пересобрать)"
+		exit 0
+	fi
 	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist \
 		--build-arg RUNTIME_IMAGE=$$1			\
@@ -131,6 +173,10 @@ dist-%: sources-%
 		--build-arg CMAKE_IMAGE=$$3				\
 		--build-arg PYTHON_IMAGE=$$4			\
 		--build-arg MRUSTC_VERSION=$$5			\
+		--build-arg MRUSTC_TARGET_VER=$${current%.*}	\
+		--build-arg MRUSTC_JOBS=$(MRUSTC_JOBS)	\
+		--build-arg BUILD_MODE=$$mode			\
+		--build-arg NINJA_VERSION=$(NINJA_VERSION)	\
 		--build-arg RUST_VERSION=$$current		\
 		--build-arg APT_DEPS="$(APT_DEPS)"		\
 		--tag $(IMAGE):$$current-dist			\
@@ -149,6 +195,11 @@ build-%: dist-%
 	[ -n "$$prev" ] && $(MAKE) build-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
+	if [ "$$5" = "-" ]; then mode=bootstrap; else mode=mrustc; fi
+	if [ "$(FORCE)" != "1" ] && docker image inspect $(IMAGE):$$current >/dev/null 2>&1; then
+		echo "  = $(IMAGE):$$current уже собран, пропускаем (FORCE=1 — пересобрать)"
+		exit 0
+	fi
 	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
 		--build-arg RUNTIME_IMAGE=$$1			\
@@ -156,6 +207,10 @@ build-%: dist-%
 		--build-arg CMAKE_IMAGE=$$3				\
 		--build-arg PYTHON_IMAGE=$$4			\
 		--build-arg MRUSTC_VERSION=$$5			\
+		--build-arg MRUSTC_TARGET_VER=$${current%.*}	\
+		--build-arg MRUSTC_JOBS=$(MRUSTC_JOBS)	\
+		--build-arg BUILD_MODE=$$mode			\
+		--build-arg NINJA_VERSION=$(NINJA_VERSION)	\
 		--build-arg RUST_VERSION=$$current		\
 		--build-arg APT_DEPS="$(APT_DEPS)"		\
 		--tag $(IMAGE):$$current				\
@@ -193,7 +248,8 @@ clean-%:
 	set -e
 	set -- $(DEPS_$*)
 	mkdir -p $(ARTIFACTS)/src
-	rm -f "$(ARTIFACTS)/src/mrustc-$$5.tar.gz" "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz"
+	[ "$$5" = "-" ] || rm -f "$(ARTIFACTS)/src/mrustc-$$5.tar.gz"
+	rm -f "$(ARTIFACTS)/src/rustc-$$current-src.tar.gz"
 
 
 .PHONY: all

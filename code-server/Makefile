@@ -25,6 +25,12 @@ RIPGREP_URL			?= https://github.com/microsoft/ripgrep-prebuilt/releases/download
 ELECTRON_URL		?= https://www.electronjs.org/headers
 # встроенные расширения (js-debug и др.), перечислены в product.json
 MARKETPLACE_URL		?= https://marketplace.visualstudio.com/_apis/public/gallery/publishers
+# git-зависимости из package-lock, зеркалятся целиком (см. sources)
+GITDEPS_URL			?= https://github.com
+# api github: sha сабмодуля lib/vscode для make deps
+GITHUB_API_URL		?= https://api.github.com
+# npm-реестр: make deps достает из пакета @vscode/ripgrep тег prebuilt-архива
+NPM_URL				?= https://registry.npmjs.org
 # выполнять ли сброс кэша: docker build --no-cache
 NO_CACHE			?= 0
 
@@ -97,6 +103,10 @@ debug:
 	$(info VSCODE_URL     = $(VSCODE_URL))
 	$(info RIPGREP_URL    = $(RIPGREP_URL))
 	$(info ELECTRON_URL   = $(ELECTRON_URL))
+	$(info MARKETPLACE_URL = $(MARKETPLACE_URL))
+	$(info GITDEPS_URL    = $(GITDEPS_URL))
+	$(info GITHUB_API_URL = $(GITHUB_API_URL))
+	$(info NPM_URL        = $(NPM_URL))
 	$(info BUILDX_IMAGE   = $(BUILDX_IMAGE))
 	$(info COMPOSE_IMAGE  = $(COMPOSE_IMAGE))
 	$(info NO_CACHE       = $(NO_CACHE))
@@ -176,7 +186,7 @@ sources-%:
 			out="$(ARTIFACTS)/src/gitdeps-$$current/$$owner-$$repo.tar.gz"
 			[ -f "$$out" ] && continue
 			m=$$(mktemp -d)
-			git clone --quiet --mirror "https://github.com/$$owner/$$repo.git" "$$m/$$owner/$$repo.git"
+			git clone --quiet --mirror "$(GITDEPS_URL)/$$owner/$$repo.git" "$$m/$$owner/$$repo.git"
 			tar -czf "$$out" -C "$$m" "$$owner"
 			rm -rf "$$m"
 		done
@@ -195,7 +205,7 @@ deps-%:
 	@current=$(*)
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	sha=$$(curl -fsSL "https://api.github.com/repos/coder/code-server/contents/lib/vscode?ref=v$$current" \
+	sha=$$(curl -fsSL "$(GITHUB_API_URL)/repos/coder/code-server/contents/lib/vscode?ref=v$$current" \
 		| python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')
 	src='$(ARTIFACTS)/src/vscode-'"$$sha"'.tar.gz'
 	[ -f "$$src" ] || curl -fsL -o "$$src" "$(VSCODE_URL)/$$sha"
@@ -204,7 +214,7 @@ deps-%:
 	ntarget=$$(tar -xzOf "$$src" vscode-$$sha/remote/.npmrc | sed -n 's/^target="\(.*\)"$$/\1/p')
 	rg_pkg=$$(tar -xzOf "$$src" vscode-$$sha/package-lock.json | python3 -c 'import json,sys; print([v["version"] for k,v in json.load(sys.stdin)["packages"].items() if k.endswith("node_modules/@vscode/ripgrep")][0])')
 	# тег prebuilt-архива зашит в postinstall.js самого пакета @vscode/ripgrep
-	rg_tag=$$(curl -fsL "https://registry.npmjs.org/@vscode/ripgrep/-/ripgrep-$$rg_pkg.tgz" | tar -xzO package/lib/postinstall.js 2>/dev/null | sed -n "s/^const VERSION = '\(.*\)';.*/\1/p")
+	rg_tag=$$(curl -fsL "$(NPM_URL)/@vscode/ripgrep/-/ripgrep-$$rg_pkg.tgz" | tar -xzO package/lib/postinstall.js 2>/dev/null | sed -n "s/^const VERSION = '\(.*\)';.*/\1/p")
 	echo "code-server $$current:"
 	echo "  vscode_sha:       $$sha"
 	echo "  node (.nvmrc):    $$nvmrc  -> нужен dmp/nodejs не ниже, тот же мажор"

@@ -10,7 +10,9 @@ TEST_DIR		?= $(BASE_DIR)/test
 
 # список версий, которые поддерживает сборщик
 # версии собираются одна за другой, строго по цепочке
-VERSION_CHAIN		?= 0.9.26
+# версии uv друг от друга не зависят (в отличие от rust), цепочка нужна только
+# чтобы `make all` собрал их все — по одной на каждый rustc из проекта rust
+VERSION_CHAIN		?= 0.9.26 0.9.30 0.10.12 0.11.19 0.11.33
 # целевая версия сборки. по умолчанию берется последняя версия
 VERSION      		?= $(lastword $(VERSION_CHAIN))
 # базовый url адрес для скачивания исходников собираемых в Dockerfile
@@ -38,8 +40,12 @@ DEPS_0.9.0		:= $(GLIBC_IMAGE)	dmp/rust:1.90.0		# 1.88
 DEPS_0.9.15		:= $(GLIBC_IMAGE)	dmp/rust:1.90.0		# 1.89
 DEPS_0.9.26		:= $(GLIBC_IMAGE)	dmp/rust:1.90.0		# 1.89
 DEPS_0.9.30		:= $(GLIBC_IMAGE)	dmp/rust:1.91.0		# 1.91
+DEPS_0.10.11	:= $(GLIBC_IMAGE)	dmp/rust:1.92.0		# 1.92
 DEPS_0.10.12	:= $(GLIBC_IMAGE)	dmp/rust:1.92.0		# 1.92
+DEPS_0.11.19	:= $(GLIBC_IMAGE)	dmp/rust:1.94.0		# 1.94
+DEPS_0.11.31	:= $(GLIBC_IMAGE)	dmp/rust:1.95.0		# 1.95
 DEPS_0.11.32	:= $(GLIBC_IMAGE)	dmp/rust:1.95.0		# 1.95
+DEPS_0.11.33	:= $(GLIBC_IMAGE)	dmp/rust:1.95.0		# 1.95
 
 # базовое название для образа
 IMAGE			:= dmp/uv

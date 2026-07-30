@@ -18,33 +18,32 @@ RUN if [ -n "${APT_DEPS}" ]; then                                       \
         && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*;       \
     fi
 
-# rustc из dmp/rust собран через mrustc и печатает "rustc 1.90.0-stable-mrustc":
-# суффикс стоит на месте канала и ломает build.rs у rustversion, version_check
-# и прочих читателей этой строки. шим правит только однострочный --version,
-# остальное проксирует как есть (`rustc -vV` корректен, cargo им и пользуется).
-# временно: в rust/Dockerfile это уже пофикшено патчем run_rustc/Makefile,
-# снять шим после пересборки dmp/rust
-RUN mkdir -p /opt/rustc-shim                                            \
-    && printf '%s\n'                                                    \
-        '#!/bin/sh'                                                     \
-        'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then'             \
-        "    /usr/local/bin/rustc --version | sed 's/-stable-mrustc//'" \
-        '    exit $?'                                                   \
-        'fi'                                                            \
-        'exec /usr/local/bin/rustc "$@"'                                \
-        > /opt/rustc-shim/rustc                                         \
-    && chmod +x /opt/rustc-shim/rustc                                   \
-    && /opt/rustc-shim/rustc --version                                  \
-    && /opt/rustc-shim/rustc -vV                                        \
-    && [ "$(/opt/rustc-shim/rustc --version | wc -l)" -eq 1 ]           \
+# rustc первого звена цепочки dmp/rust собран через mrustc и печатает
+# "rustc 1.90.0-stable-mrustc": суффикс стоит на месте канала и ломает build.rs
+# у rustversion, version_check и прочих читателей этой строки. шим правит только
+# однострочный --version, остальное проксирует как есть (`rustc -vV` корректен,
+# cargo им и пользуется). для bootstrap-собранных rustc (1.91+) шим — симлинк
+RUN mkdir -p /opt/rustc-shim                                                \
+    && if /usr/local/bin/rustc --version | grep -q -- '-stable-mrustc'; then \
+        printf '%s\n'                                                       \
+            '#!/bin/sh'                                                     \
+            'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then'             \
+            "    /usr/local/bin/rustc --version | sed 's/-stable-mrustc//'" \
+            '    exit $?'                                                   \
+            'fi'                                                            \
+            'exec /usr/local/bin/rustc "$@"'                                \
+            > /opt/rustc-shim/rustc                                         \
+        && chmod +x /opt/rustc-shim/rustc;                                  \
+    else                                                                    \
+        ln -s /usr/local/bin/rustc /opt/rustc-shim/rustc;                   \
+    fi                                                                      \
+    && /opt/rustc-shim/rustc --version                                      \
+    && /opt/rustc-shim/rustc -vV                                            \
+    && [ "$(/opt/rustc-shim/rustc --version | wc -l)" -eq 1 ]               \
     && [ -z "$(/opt/rustc-shim/rustc --version | grep mrustc || true)" ]
 
-# сеть в сборке не нужна: крейты лежат в vendor/ внутри тарбола.
-# LTO=off — std из dmp/rust собран без LLVM-биткода в rlib, а в uv профиль
-# release объявлен с lto = "fat"; линковка падает на "Can't find section .llvmbc".
-# временно, как и шим выше: снять после пересборки dmp/rust
+# сеть в сборке не нужна: крейты лежат в vendor/ внутри тарбола
 ENV CARGO_NET_OFFLINE=true \
-    CARGO_PROFILE_RELEASE_LTO=off \
     CC=/usr/local/bin/gcc \
     CXX=/usr/local/bin/g++ \
     RUSTC=/opt/rustc-shim/rustc \
@@ -52,7 +51,17 @@ ENV CARGO_NET_OFFLINE=true \
 
 # uv
 COPY artifacts/src/ /tmp/src/
+# профиль release у uv объявлен с lto = "fat", а std первого звена цепочки
+# dmp/rust собран без LLVM-биткода в rlib — линковка падает на
+# "Can't find section .llvmbc". смотрим биткод и гасим lto только там, где надо
 RUN set -eux;                                                           \
+    std="$(ls /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd*.rlib | head -1)"; \
+    mkdir -p /tmp/bc;                                                   \
+    (cd /tmp/bc && ar x "$std" && objdump -h ./*.o | grep -q llvmbc)     \
+        && echo "std с биткодом: lto как в профиле uv"                  \
+        || { echo "std без биткода: lto выключаем";                     \
+             export CARGO_PROFILE_RELEASE_LTO=off; };                   \
+    rm -rf /tmp/bc;                                                     \
     cd /tmp;                                                            \
     tar -xf src/uv-${UV_VERSION}.tar.gz;                                \
     cd uv-${UV_VERSION};                                                \
