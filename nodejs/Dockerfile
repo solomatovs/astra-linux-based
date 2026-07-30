@@ -97,7 +97,7 @@ RUN printf '%s\n'           \
     > /etc/ld.so.conf.d/nodejs-local.conf \
     && ldconfig
 
-COPY artifacts/npmrc* /tmp/npmrc/
+COPY npmrc* /tmp/npmrc/
 RUN if [ -f /tmp/npmrc/npmrc ]; then \
         cp /tmp/npmrc/npmrc /usr/local/etc/npmrc; \
     fi \

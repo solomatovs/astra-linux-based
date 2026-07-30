@@ -46,7 +46,7 @@ RUN apt-get update                                              \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # npmrc
-COPY artifacts/npmrc* /tmp/npmrc/
+COPY npmrc* /tmp/npmrc/
 RUN if [ -f /tmp/npmrc/npmrc ]; then cp /tmp/npmrc/npmrc /usr/local/etc/npmrc; fi \
     && rm -rf /tmp/npmrc
 
@@ -123,8 +123,8 @@ RUN set -eux;                                                                   
 RUN set -eux;                                                                       \
     mkdir -p /tmp/rg && tar -xzf /tmp/src/ripgrep.tar.gz -C /tmp/rg rg;             \
     export npm_config_ignore_scripts=true;                                          \
-    cd ${SRC} && npm install;                                                       \
-    cd ${SRC}/lib/vscode && npm install;                                            \
+    cd ${SRC} && npm --loglevel verbose install;                                                       \
+    cd ${SRC}/lib/vscode && npm --loglevel verbose install;                                            \
     node build/npm/postinstall.ts;                                                  \
     find ${SRC} -type d -path '*/node_modules/@vscode/ripgrep'                      \
         -exec sh -c 'mkdir -p "$1/bin" && cp /tmp/rg/rg "$1/bin/rg"' _ {} \; ;      \
