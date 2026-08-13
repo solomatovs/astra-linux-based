@@ -1,28 +1,10 @@
 #!/usr/bin/env python3
-"""Переписывает github-зависимости на локальные зеркала.
-
-Часть зависимостей vscode ставится не из реестра, а с github: в package.json
-они записаны сокращением (github:owner/repo#ref или просто owner/repo#ref),
-в package-lock — как git+ssh://git@github.com/owner/repo.git#sha.
-
-Подменить их через git insteadOf нельзя: для github npm не зовет git вообще,
-а срезает угол и качает тарбол с codeload.github.com. Поэтому переписываем
-спеки на git+file:///<зеркало>/owner/repo.git — такой хост npm не считает
-«hosted» и клонирует обычным git из локального пути.
-
-Зеркала кладет make sources (artifacts/src/gitdeps-<версия>), набор берется
-из lockfile, поэтому новая зависимость в апстриме подхватится сама.
-
-  gitdeps-rewrite.py <каталог исходников> <каталог зеркал>
-"""
-
 import os
 import re
 import sys
 
 
 def mirrors(gitdeps):
-    """owner/repo для каждого зеркала <gitdeps>/<owner>/<repo>.git"""
     for owner in sorted(os.listdir(gitdeps)):
         path = os.path.join(gitdeps, owner)
         if not os.path.isdir(path):

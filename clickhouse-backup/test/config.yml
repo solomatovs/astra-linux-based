@@ -1,0 +1,12 @@
+general:
+  remote_storage: none
+  backups_to_keep_local: 2
+  backups_to_keep_remote: 0
+  log_level: info
+
+clickhouse:
+  host: localhost
+  port: 9000
+  username: default
+  password: ""
+  timeout: 5m

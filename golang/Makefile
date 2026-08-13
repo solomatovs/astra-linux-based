@@ -10,7 +10,7 @@ TEST_DIR		?= $(BASE_DIR)/test
 
 # список версий, которые поддерживает сборщик
 # версии собираются одна за другой, строго по цепочке
-VERSION_CHAIN		?= 1.4 1.17.13 1.20.6 1.22.6 1.24.5 1.25.12
+VERSION_CHAIN		?= 1.4 1.17.13 1.20.6 1.22.6 1.24.5 1.25.12 1.26.5
 # целевая версия сборки. по умолчанию берется последняя версия
 # соответственно для ее сборки потребуется собрать все предыдущие версии в цепочки
 VERSION      		?= $(lastword $(VERSION_CHAIN))
@@ -29,6 +29,7 @@ DEPS_1.20.6		:= $(GLIBC_IMAGE)	dmp/golang:1.17.13-dist
 DEPS_1.22.6		:= $(GLIBC_IMAGE)	dmp/golang:1.20.6-dist
 DEPS_1.24.5		:= $(GLIBC_IMAGE)	dmp/golang:1.22.6-dist
 DEPS_1.25.12	:= $(GLIBC_IMAGE)	dmp/golang:1.24.5-dist
+DEPS_1.26.5		:= $(GLIBC_IMAGE)	dmp/golang:1.25.12-dist
 
 # базовое название для образа
 IMAGE			:= dmp/golang

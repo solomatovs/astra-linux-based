@@ -1,0 +1,12 @@
+# ============================================================
+# Go env для закрытого контура (nexus). Реальный файл — go-env рядом с
+# Makefile, монтируется в /etc/go/env на этапе make sources (GOENV).
+# По умолчанию отсутствует — go идёт в публичный proxy.golang.org.
+#
+# Для nexus раскомментируйте/замените:
+#   GOPROXY=https://nexus.internal.example.com/repository/go-proxy/
+#   GOSUMDB=off
+#   GOPRIVATE=*.internal.example.com
+#
+# Проверить: make sources VERSION=<версия> — в логе видно, откуда качаются модули
+# ============================================================

@@ -1,67 +1,48 @@
 BASE_DIR      	?= $(abspath .)
 ARTIFACTS     	?= $(abspath $(BASE_DIR)/../../ci-artifacts/code-server)
 BUILD_CONTEXT 	?= $(BASE_DIR)
-# рабочая копия $(ARTIFACTS) внутри контекста сборки (хардлинки, см. artifacts-link)
 LINKED_ARTIFACTS ?= $(BUILD_CONTEXT)/artifacts
 TEST_DIR		?= $(BASE_DIR)/test
-
-# путь, по которому дистрибутив лежит внутри -dist образа (CS_PATH в Dockerfile)
 CS_PATH			?= /opt/code-server
 
 
 .DEFAULT_GOAL := help
 
-# список версий, которые поддерживает сборщик
 VERSION_CHAIN		?= 4.116.0 4.117.0
-# целевая версия сборки. по умолчанию берется последняя версия
 VERSION      		?= $(lastword $(VERSION_CHAIN))
-# базовый url адрес для скачивания исходников собираемых в Dockerfile
 BASE_URL			?= https://codeload.github.com/coder/code-server/tar.gz/refs/tags
-# lib/vscode — git-сабмодуль, тарбол берется по запиненному коммиту
 VSCODE_URL			?= https://codeload.github.com/microsoft/vscode/tar.gz
-# ripgrep: @vscode/ripgrep тянет готовый бинарник с api.github.com
 RIPGREP_URL			?= https://github.com/microsoft/ripgrep-prebuilt/releases/download
-# заголовки electron: корневой .npmrc в vscode собирает нативные модули под electron
 ELECTRON_URL		?= https://www.electronjs.org/headers
-# встроенные расширения (js-debug и др.), перечислены в product.json
 MARKETPLACE_URL		?= https://marketplace.visualstudio.com/_apis/public/gallery/publishers
-# git-зависимости из package-lock, зеркалятся целиком (см. sources)
 GITDEPS_URL			?= https://github.com
-# api github: sha сабмодуля lib/vscode для make deps
 GITHUB_API_URL		?= https://api.github.com
-# npm-реестр: make deps достает из пакета @vscode/ripgrep тег prebuilt-архива
 NPM_URL				?= https://registry.npmjs.org
-# выполнять ли сброс кэша: docker build --no-cache
+AGENT_BROWSER_URL	?= https://github.com/vercel-labs/agent-browser/releases/download
 NO_CACHE			?= 0
 
-# node 22.22.1 — версия из .nvmrc собираемого vscode. более старый node не проходит
-# проверку в build/npm/preinstall.ts, поэтому 22.11.0 здесь не годится
-NODE_IMAGE			?= dmp/nodejs:22.22.1
+NODE_IMAGE			?= dmp/nodejs:22.22.1-dist
+RUNTIME_IMAGE			?= dmp/glibc:2.28
 GCC_IMAGE			?= dmp/gcc:12.4.0-dist
 PYTHON_IMAGE		?= dmp/python:3.10-dist
 
-# docker cli-плагины, кладутся в рантайм-образ как есть (статические бинарники).
-# от версии code-server не зависят, поэтому не в DEPS
 BUILDX_IMAGE		?= dmp/docker-buildx:0.30.0-dist
 COMPOSE_IMAGE		?= dmp/docker-compose:2.38.2-dist
 
-# зависимости для сборки разных версии
-# vscode_sha:  коммит сабмодуля lib/vscode
-# ripgrep:     тег prebuilt-архива из postinstall.js пакета @vscode/ripgrep
-# electron:    target из lib/vscode/.npmrc
-# node:        target из lib/vscode/remote/.npmrc, он же node внутри reh-бандла
-# узнать значения для новой версии: make deps VERSION=<версия>
-# версия           runtime_image	gcc_image		python_image	vscode_sha									ripgrep		ripgrep_target					electron	node
+# портативный релиз: одна папка со всем (бандл, node, библиотеки, env, unit, data)
+RELEASE_NAME		:= code-server-$(VERSION)
+STAGE_DIR			?= $(BASE_DIR)/release/$(RELEASE_NAME)
+# куда релиз разворачивается на сервере (совпадает с CS_DIR внутри образа)
+DEST_DIR			?= /app/code-server/$(VERSION)
+
 DEPS_4.116.0	:= $(NODE_IMAGE)	$(GCC_IMAGE)	$(PYTHON_IMAGE)	560a9dba96f961efea7b1612916f89e5d5d4d679	v15.0.1		x86_64-unknown-linux-musl		39.8.7		22.22.1
 DEPS_4.117.0	:= $(NODE_IMAGE)	$(GCC_IMAGE)	$(PYTHON_IMAGE)	10c8e557c8b9f9ed0a87f61f1c9a44bde731c409	v15.0.1		x86_64-unknown-linux-musl		39.8.7		22.22.1
 
-# базовое название для образа
 IMAGE			:= dmp/code-server
 FIRST_VERSION	:= $(firstword $(VERSION_CHAIN))
 NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
 
-# helper: поиск предыдущей версии в VERSION_CHAIN
 prev_of = $(shell echo "$(VERSION_CHAIN)" | awk -v v='$(1)' '{for(i=1;i<=NF;i++){if($$i==v){print p;exit};p=$$i}}')
 
 
@@ -74,6 +55,8 @@ help:
 	@echo "  make dist       собрать цепочку -dist образов одну за другой до $(VERSION)"
 	@echo "  make extract    достать дистрибутив ($(CS_PATH)) из -dist образа в $(ARTIFACTS)/build/<версия>"
 	@echo "  make build      собрать образ $(IMAGE)"
+	@echo "  make release    собрать портативную папку релиза ($(STAGE_DIR))"
+	@echo "  make export     скопировать релиз на сервер ($(DEST_DIR)) + установить systemd-юнит"
 	@echo "  make test       проверить образ $(IMAGE): версии, запуск сервера, HTTP-ответ"
 	@echo ""
 	@echo "  Цепочка: $(VERSION_CHAIN)"
@@ -81,8 +64,8 @@ help:
 	@echo "  патчи из patches/ через quilt, затем gulp vscode-reh-web-linux-x64-min"
 	@echo "  и build-release.sh."
 	@echo "  Всё, что апстрим качает мимо npm-реестра (ripgrep, заголовки node и electron,"
-	@echo "  node для reh-бандла, встроенные расширения), заранее лежит в $(ARTIFACTS)/src"
-	@echo "  и подкладывается до запуска сборки — см. sources и Dockerfile."
+	@echo "  node для reh-бандла, встроенные расширения, бинарник agent-browser), заранее"
+	@echo "  лежит в $(ARTIFACTS)/src и подкладывается до запуска сборки — см. sources и Dockerfile."
 	@echo "  Зависимости задаются пословно в DEPS_<версия>."
 	@echo "  Другая версия: make all VERSION=4.116.0"
 	@echo ""
@@ -93,6 +76,9 @@ debug:
 	$(info BASE_DIR       = $(BASE_DIR))
 	$(info ARTIFACTS      = $(ARTIFACTS))
 	$(info CS_PATH        = $(CS_PATH))
+	$(info RELEASE_NAME   = $(RELEASE_NAME))
+	$(info STAGE_DIR      = $(STAGE_DIR))
+	$(info DEST_DIR       = $(DEST_DIR))
 	$(info BUILD_CONTEXT  = $(BUILD_CONTEXT))
 	$(info LINKED_ARTIFACTS = $(LINKED_ARTIFACTS))
 	$(info TEST_DIR       = $(TEST_DIR))
@@ -107,6 +93,8 @@ debug:
 	$(info GITDEPS_URL    = $(GITDEPS_URL))
 	$(info GITHUB_API_URL = $(GITHUB_API_URL))
 	$(info NPM_URL        = $(NPM_URL))
+	$(info NODE_IMAGE     = $(NODE_IMAGE))
+	$(info RUNTIME_IMAGE  = $(RUNTIME_IMAGE))
 	$(info BUILDX_IMAGE   = $(BUILDX_IMAGE))
 	$(info COMPOSE_IMAGE  = $(COMPOSE_IMAGE))
 	$(info NO_CACHE       = $(NO_CACHE))
@@ -116,8 +104,6 @@ debug:
 	@true
 
 
-# docker build видит только свой контекст, поэтому перед сборкой подкладываем
-# $(ARTIFACTS) в $(LINKED_ARTIFACTS) хардлинками: места не занимает, копий нет
 .PHONY: artifacts-link
 artifacts-link:
 	@set -e
@@ -136,7 +122,6 @@ artifacts-link:
 	}
 
 
-# Скачиваем зависимости для сборки дистрибутива
 .PHONY: sources
 sources: sources-$(VERSION)
 
@@ -144,7 +129,6 @@ sources: sources-$(VERSION)
 sources-%:
 	@current=$(*)
 	@prev='$(call prev_of,$*)'
-	# вызываем рекурсивно предыдущую версию
 	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
@@ -157,10 +141,12 @@ sources-%:
 	; do url=$${spec%%|*}; name=$${spec#*|}; name=$${name:-$${url##*/}}
 		[ -f "$(ARTIFACTS)/src/$$name" ] || curl -fvL -o "$(ARTIFACTS)/src/$$name" "$$url"
 	done
-	# встроенные расширения перечислены в product.json скачанного vscode. набор
-	# и версии отличаются между версиями code-server, поэтому каждая складывает
-	# их в свой каталог. имя файла — <publisher>.<name>-<версия>.vsix, из него
-	# Dockerfile получает каталог .build/builtInExtensions/<publisher>.<name>
+	mkdir -p "$(ARTIFACTS)/src/agent-browser-$$current"
+	ab_version="$$(tar -xzOf "$(ARTIFACTS)/src/vscode-$$4.tar.gz" "vscode-$$4/package-lock.json" \
+		| python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"]["node_modules/agent-browser"]["version"])')"
+	[ -f "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" ] \
+		|| curl -fvL -o "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" \
+			"$(AGENT_BROWSER_URL)/v$$ab_version/agent-browser-linux-x64"
 	mkdir -p "$(ARTIFACTS)/src/builtin-$$current"
 	tar -xzOf "$(ARTIFACTS)/src/vscode-$$4.tar.gz" "vscode-$$4/product.json" \
 		| python3 -c 'import json,sys; [print(e["name"], e["version"]) for e in (json.load(sys.stdin).get("builtInExtensions") or [])]' \
@@ -169,12 +155,6 @@ sources-%:
 			curl -fvL --compressed -o "$(ARTIFACTS)/src/builtin-$$current/$$name-$$version.vsix" \
 				"$(MARKETPLACE_URL)/$${name%%.*}/vsextensions/$${name#*.}/$$version/vspackage"
 		done
-	# часть зависимостей ставится не из реестра, а по git-протоколу: в
-	# package-lock они записаны как git+ssh://git@github.com/... Зеркалим такие
-	# репозитории целиком, Dockerfile переписывает resolved на эти зеркала.
-	# набор берется из самих lockfile, а не из списка, чтобы не пропустить новую;
-	# смотреть надо все шесть десятков (корень, build, remote и каждое
-	# расширение), а не только корневой: emmet и copilot тоже тянут с github
 	mkdir -p "$(ARTIFACTS)/src/gitdeps-$$current"
 	tmp=$$(mktemp -d)
 	tar -xzf "$(ARTIFACTS)/src/vscode-$$4.tar.gz" -C "$$tmp" --strip-components=1 --wildcards '*/package-lock.json'
@@ -193,10 +173,6 @@ sources-%:
 	rm -rf "$$tmp"
 
 
-# Показывает версии зависимостей, которые требуют исходники указанной версии:
-# они зашиты внутри vscode (.nvmrc, .npmrc, package-lock.json). Числа отсюда
-# переносятся руками в DEPS_<версия>. Работает и для версии, которой еще нет
-# в DEPS — коммит сабмодуля и тарбол vscode добывает сам
 .PHONY: deps
 deps: deps-$(VERSION)
 
@@ -213,7 +189,6 @@ deps-%:
 	electron=$$(tar -xzOf "$$src" vscode-$$sha/.npmrc | sed -n 's/^target="\(.*\)"$$/\1/p')
 	ntarget=$$(tar -xzOf "$$src" vscode-$$sha/remote/.npmrc | sed -n 's/^target="\(.*\)"$$/\1/p')
 	rg_pkg=$$(tar -xzOf "$$src" vscode-$$sha/package-lock.json | python3 -c 'import json,sys; print([v["version"] for k,v in json.load(sys.stdin)["packages"].items() if k.endswith("node_modules/@vscode/ripgrep")][0])')
-	# тег prebuilt-архива зашит в postinstall.js самого пакета @vscode/ripgrep
 	rg_tag=$$(curl -fsL "$(NPM_URL)/@vscode/ripgrep/-/ripgrep-$$rg_pkg.tgz" | tar -xzO package/lib/postinstall.js 2>/dev/null | sed -n "s/^const VERSION = '\(.*\)';.*/\1/p")
 	echo "code-server $$current:"
 	echo "  vscode_sha:       $$sha"
@@ -227,7 +202,6 @@ deps-%:
 		"$$current" "$$sha" "$${rg_tag:-?}" "$$electron" "$$ntarget"
 
 
-# docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)
 .PHONY: dist
 dist: dist-$(VERSION)
 
@@ -235,13 +209,13 @@ dist: dist-$(VERSION)
 dist-%: sources-%
 	@current=$(*)
 	prev='$(call prev_of,$*)'
-	# рекурсивно собираем предыдущую версию
 	[ -n "$$prev" ] && $(MAKE) dist-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
 	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist		\
-		--build-arg RUNTIME_IMAGE=$$1								\
+		--build-arg NODE_IMAGE=$$1									\
+		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE)						\
 		--build-arg GCC_IMAGE=$$2									\
 		--build-arg PYTHON_IMAGE=$$3								\
 		--build-arg CS_VERSION=$$current							\
@@ -253,8 +227,6 @@ dist-%: sources-%
 		--progress plain $(BUILD_CONTEXT)
 
 
-# извлечь скомпилированный дистрибутив (/opt/code-server) из -dist образа
-# в artifacts/build/<версия>
 .PHONY: extract
 extract: extract-$(VERSION)
 
@@ -264,7 +236,6 @@ extract-%: dist-%
 	set -e
 	img='$(IMAGE):'"$$current"'-dist'
 	dst='$(ARTIFACTS)/build/'"$$current"
-	# создаём временный контейнер из -dist образа (без запуска) и копируем из него дерево
 	cid=$$(docker create $$img)
 	trap 'docker rm -f $$cid >/dev/null 2>&1 || true' EXIT
 	rm -rf "$$dst"
@@ -274,7 +245,6 @@ extract-%: dist-%
 	du -h --max-depth=1 "$$dst" || true
 
 
-# docker build - истоговый образ с установленным ПО (установка из дистрибутива)
 .PHONY: build
 build: build-$(VERSION)
 
@@ -282,14 +252,14 @@ build: build-$(VERSION)
 build-%: dist-%
 	@current=$(*)
 	prev='$(call prev_of,$*)'
-	# рекурсивно собираем предыдущую версию
 	[ -n "$$prev" ] && $(MAKE) build-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
 	major=$${current%%.*}
 	$(MAKE) --no-print-directory artifacts-link
 	docker build -f Dockerfile $(NO_CACHE_TEXT)						\
-		--build-arg RUNTIME_IMAGE=$$1								\
+		--build-arg NODE_IMAGE=$$1									\
+		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE)						\
 		--build-arg GCC_IMAGE=$$2									\
 		--build-arg PYTHON_IMAGE=$$3								\
 		--build-arg CS_VERSION=$$current							\
@@ -304,7 +274,44 @@ build-%: dist-%
 		--progress plain $(BUILD_CONTEXT)
 
 
-# тестирование собранного образа
+# портативный релиз: собрать runtime-образ и достать ${CS_DIR} docker cp
+.PHONY: release
+release: release-$(VERSION)
+
+.ONESHELL:
+release-%: build-%
+	@current=$(*)
+	img='$(IMAGE):'"$$current"
+	cs_dir='/app/code-server/'"$$current"
+	rm -rf "$(STAGE_DIR)"
+	mkdir -p "$(STAGE_DIR)"
+	cid=$$(docker create $$img)
+	trap 'docker rm -f $$cid >/dev/null 2>&1 || true' EXIT
+	docker cp "$$cid:$$cs_dir/." "$(STAGE_DIR)/"
+	docker rm "$$cid" >/dev/null
+	trap - EXIT
+	echo "release: code-server-$$current"       > "$(STAGE_DIR)/VERSION.txt"
+	echo "version: $$current"                  >> "$(STAGE_DIR)/VERSION.txt"
+	echo "source:  $(BASE_DIR)"                >> "$(STAGE_DIR)/VERSION.txt"
+	chown -R "$$(stat -c '%u:%g' "$(STAGE_DIR)")" "$(STAGE_DIR)"
+	echo ">>> релиз готов: $(STAGE_DIR)  ($$(du -sh --apparent-size "$(STAGE_DIR)" | cut -f1))"
+	echo "    на сервере: $(DEST_DIR) — путь зашит в conf/code-server.env и conf/code-server.service"
+
+
+# скопировать собранный релиз в $(DEST_DIR) (через sudo, если каталог не пишется)
+.PHONY: export
+export:
+	@[ -d "$(STAGE_DIR)/code-server" ] || { echo "нет собранного релиза — сначала: make release" >&2; exit 1; }
+	echo ">>> экспорт: $(STAGE_DIR) -> $(DEST_DIR)"
+	SUDO=""; [ -w "$$(dirname $(DEST_DIR))" ] || SUDO=sudo
+	$$SUDO rm -rf "$(DEST_DIR)"
+	$$SUDO mkdir -p "$$(dirname $(DEST_DIR))"
+	$$SUDO cp -a "$(STAGE_DIR)/." "$(DEST_DIR)"
+	$$SUDO chown -R "$$(stat -c '%u:%g' "$(STAGE_DIR)")" "$(DEST_DIR)"
+	echo ">>> готово: $(DEST_DIR)"
+	echo "    запуск: sudo cp $(DEST_DIR)/conf/code-server.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now code-server"
+
+
 .PHONY: test
 test: test-$(VERSION)
 
@@ -355,7 +362,6 @@ clean: clean-$(VERSION)
 clean-%:
 	@current=$(*)
 	@prev='$(call prev_of,$*)'
-	# вызываем рекурсивно предыдущую версию
 	[ -n "$$prev" ] && $(MAKE) clean-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
@@ -366,7 +372,7 @@ clean-%:
 		"$(ARTIFACTS)/src/electron-v$$7-headers.tar.gz"					\
 	; do rm -f "$$spec" ;
 	done
-	rm -rf "$(ARTIFACTS)/src/builtin-$$current" "$(ARTIFACTS)/src/gitdeps-$$current"
+	rm -rf "$(ARTIFACTS)/src/builtin-$$current" "$(ARTIFACTS)/src/gitdeps-$$current" "$(ARTIFACTS)/src/agent-browser-$$current"
 
 
 .PHONY: all

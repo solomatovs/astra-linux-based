@@ -2,6 +2,8 @@
 ARG BUILD_IMAGE=dmp/gcc:8.5.0-dist
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+FROM ${RUNTIME_IMAGE} AS headers
+
 FROM ${BUILD_IMAGE} AS dist
 
 ARG PG_VERSION
@@ -27,6 +29,15 @@ RUN apt-get update                  \
         /var/lib/apt/lists/*        \
         /var/cache/apt/archives/*
 
+# gcc:*-dist, собранные на glibc:2.28 без dummy libc6-dev, несут в /usr/include
+# затёртые apt'ом заголовки glibc 2.24 — восстанавливаем родные 2.28.
+# Мультиарх-копии libc-заголовков 2.24 конфликтуют с ними (double stack_t) —
+# удаляем; kernel-заголовки (asm, linux) не трогаем
+COPY --from=headers /usr/include/ /usr/include/
+RUN rm -rf /usr/include/x86_64-linux-gnu/bits    \
+           /usr/include/x86_64-linux-gnu/sys     \
+           /usr/include/x86_64-linux-gnu/gnu
+
 # MIT krb5 (для GSSAPI/Kerberos в postgres) — как в samba-ad, shared, в /usr/local.
 # --disable-pkinit: единственный компонент krb5, которому нужен OpenSSL (не тянем второй).
 ARG KRB5_VERSION
@@ -50,6 +61,7 @@ RUN cd /tmp                                                          \
     && tar -xf pg.tar.bz2                                            \
     && cd postgresql-${PG_VERSION}                                   \
     && export PYTHON=/usr/bin/python3.7                              \
+    && rm -f /usr/lib/x86_64-linux-gnu/libieee.a                    \
     && ar rcs /usr/lib/x86_64-linux-gnu/libieee.a                   \
     && CPPFLAGS="-I/usr/local/include"                               \
        LDFLAGS="-L/usr/local/lib -Wl,-rpath,/usr/local/lib"          \
@@ -63,7 +75,8 @@ RUN cd /tmp                                                          \
                 libkrb5support libverto; do                          \
          cp -a /usr/local/lib/$p.so* ${PG_PATH}/usr/local/lib/ 2>/dev/null || true; \
        done                                                          \
-    && cp -a /usr/local/lib/krb5 ${PG_PATH}/usr/local/lib/ 2>/dev/null || true \
+    # скобки обязательны: голый `|| true` в конце &&-цепочки маскирует падение любой команды выше
+    && { cp -a /usr/local/lib/krb5 ${PG_PATH}/usr/local/lib/ 2>/dev/null || true; } \
     && cd / && rm -rf /tmp/*
 
 
@@ -80,6 +93,10 @@ RUN if [ -n "${RUNTIME_APT_DEPS}" ]; then                                   \
         && apt-get clean                                                    \
         && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*;           \
     fi
+
+# en_US.utf8: кластеры, инициализированные официальным образом, используют эту libc-локаль
+RUN localedef -i en_US -c -f UTF-8 en_US.UTF-8 \
+    && locale -a | grep -q '^en_US\.utf8$'
 
 # сервер и его библиотеки из dist-стадии
 COPY --from=dist ${PG_PATH} /

@@ -1,0 +1,21 @@
+[Unit]
+Description=code-server ${CS_VERSION}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+EnvironmentFile=${CS_DIR}/conf/code-server.env
+WorkingDirectory=${CS_DIR}
+ExecStart=${CS_DIR}/code-server/bin/code-server --bind-addr 0.0.0.0:8080 .
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+User=coder
+Group=coder
+
+[Install]
+WantedBy=multi-user.target
