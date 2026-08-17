@@ -58,16 +58,42 @@ RUNTIME_APT_DEPS := \
 		dnsutils iproute2 procps
 
 
-# helper: поиск предыдущей версии в VERSION_CHAIN
-prev_of = $(shell echo "$(VERSION_CHAIN)" | awk -v v='$(1)' '{for(i=1;i<=NF;i++){if($$i==v){print p;exit};p=$$i}}')
+# FORCE=1 — пересобрать, даже если образ уже есть
+FORCE				?= 0
+
+# уже собранные образы, снимок на момент запуска make
+BUILT				:= $(if $(filter 1,$(FORCE) $(NO_CACHE)),,$(shell docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null))
+built = $(filter $(1),$(BUILT))
+
+# зависимости версии берутся из DEPS_<версия>: ссылка на образ этого же проекта
+# означает, что сначала надо собрать то звено
+deps_of = $(patsubst $(IMAGE):%-dist,dist-%,$(filter $(IMAGE):%-dist,$(DEPS_$(1)))) \
+          $(patsubst $(IMAGE):%,build-%,$(filter-out %-dist,$(filter $(IMAGE):%,$(DEPS_$(1)))))
+
+# что собрать перед версией; если образ уже есть — ничего
+need_dist  = $(if $(call built,$(IMAGE):$(1)-dist),,sources-$(1) $(call deps_of,$(1)) artifacts-link)
+need_build = $(if $(call built,$(IMAGE):$(1)),,dist-$(1) $(call deps_of,$(1)) artifacts-link)
+
+# второй проход по списку зависимостей: только там уже известен $* (версия),
+# поэтому $$(call need_dist,$$*) можно вычислить
+.SECONDEXPANSION:
+# зависимости обновляются слева направо, artifacts-link должен отработать последним
+.NOTPARALLEL:
+
+.PHONY: sources-all dist-all build-all test-all clean-all
+sources-all:		$(addprefix sources-,$(VERSION_CHAIN))
+dist-all:		$(addprefix dist-,$(VERSION_CHAIN))
+build-all:		$(addprefix build-,$(VERSION_CHAIN))
+test-all:		$(addprefix test-,$(VERSION_CHAIN))
+clean-all:		$(addprefix clean-,$(VERSION_CHAIN))
 
 
 .PHONY: help
 help:
 	@echo "make:"
 	@echo "  make all        собрать всё"
-	@echo "  make sources    скачать исходники для цепочки вплоть до $(VERSION)"
-	@echo "  make dist       собрать цепочку -dist образов одну за другой до $(VERSION)"
+	@echo "  make sources    скачать исходники для $(VERSION)"
+	@echo "  make dist       собрать -dist образ $(VERSION) (звенья цепочки — если нужны)"
 	@echo "  make build      собрать образ $(IMAGE)"
 	@echo "  make test       проверить образ $(IMAGE): версии samba/krb5, samba-tool, provision-smoke"
 	@echo ""
@@ -75,6 +101,8 @@ help:
 	@echo "  Зависимости (runtime_image/build_image/python_image/nettle/gnutls/krb5) задаются пословно в DEPS_<версия>."
 	@echo "  Другая версия: make all VERSION=4.21.3"
 	@echo ""
+	@echo "  make <стадия>-all  то же для всех версий из VERSION_CHAIN"
+	@echo "  FORCE=1            пересобрать, даже если образ уже есть"
 
 
 .PHONY: debug
@@ -121,9 +149,6 @@ sources: sources-$(VERSION)
 .ONESHELL:
 sources-%:
 	@current=$(*)
-	@prev='$(call prev_of,$*)'
-	# вызываем рекурсивно предыдущую версию
-	[ -n "$$prev" ] && $(MAKE) sources-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
 	mkdir -p $(ARTIFACTS)/src
@@ -143,14 +168,11 @@ sources-%:
 dist: dist-$(VERSION)
 
 .ONESHELL:
-dist-%: sources-%
+dist-%: $$(call need_dist,$$*)
 	@current=$(*)
-	prev='$(call prev_of,$*)'
-	# рекурсивно собираем предыдущую версию
-	[ -n "$$prev" ] && $(MAKE) dist-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
-	$(MAKE) --no-print-directory artifacts-link
+	[ -z "$(call built,$(IMAGE):$*-dist)" ] || { echo "  = $(IMAGE):$*-dist уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist \
 		--build-arg RUNTIME_IMAGE=$$1 				\
 		--build-arg BUILD_IMAGE=$$2 				\
@@ -170,14 +192,11 @@ dist-%: sources-%
 build: build-$(VERSION)
 
 .ONESHELL:
-build-%: dist-%
+build-%: $$(call need_build,$$*)
 	@current=$(*)
-	prev='$(call prev_of,$*)'
-	# рекурсивно собираем предыдущую версию
-	[ -n "$$prev" ] && $(MAKE) build-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
-	$(MAKE) --no-print-directory artifacts-link
+	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
 		--build-arg RUNTIME_IMAGE=$$1			\
 		--build-arg BUILD_IMAGE=$$2				\
@@ -211,9 +230,6 @@ clean: clean-$(VERSION)
 .ONESHELL:
 clean-%:
 	@current=$(*)
-	@prev='$(call prev_of,$*)'
-	# вызываем рекурсивно предыдущую версию
-	[ -n "$$prev" ] && $(MAKE) clean-$$prev || true
 	set -e
 	set -- $(DEPS_$*)
 	rm -f	"$(ARTIFACTS)/src/nettle-$$4.tar.gz"	\
