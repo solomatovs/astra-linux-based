@@ -39,6 +39,27 @@ DEPS_7.4.2		:= $(GLIBC_IMAGE)    $(GCC_IMAGE)
 IMAGE			:= dmp/redis
 NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
+# FORCE=1 — пересобрать, даже если образ уже есть
+FORCE				?= 0
+
+# уже собранные образы, снимок на момент запуска make
+BUILT				:= $(if $(filter 1,$(FORCE) $(NO_CACHE)),,$(shell docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null))
+built = $(filter $(1),$(BUILT))
+need_dist = $(if $(call built,$(IMAGE):$(1)-dist),,sources-$(1) artifacts-link)
+need_build = $(if $(call built,$(IMAGE):$(1)),,dist-$(1) artifacts-link)
+
+# второй проход по зависимостям: только там уже известен $* (версия)
+.SECONDEXPANSION:
+# зависимости обновляются слева направо, artifacts-link должен отработать последним
+.NOTPARALLEL:
+
+.PHONY: build-all clean-all dist-all sources-all test-all
+build-all:		$(addprefix build-,$(VERSIONS))
+clean-all:		$(addprefix clean-,$(VERSIONS))
+dist-all:		$(addprefix dist-,$(VERSIONS))
+sources-all:		$(addprefix sources-,$(VERSIONS))
+test-all:		$(addprefix test-,$(VERSIONS))
+
 
 .PHONY: help
 help:
@@ -113,13 +134,13 @@ sources-%:
 dist: dist-$(VERSION)
 
 .ONESHELL:
-dist-%: sources-%
+dist-%: $$(call need_dist,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
 	runtime=$$1; build=$$2
 	short=$${current%.*}
-	$(MAKE) --no-print-directory artifacts-link
+	[ -z "$(call built,$(IMAGE):$*-dist)" ] || { echo "  = $(IMAGE):$*-dist уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist	\
 		--build-arg RUNTIME_IMAGE=$$runtime 					\
 		--build-arg BUILD_IMAGE=$$build 						\
@@ -136,13 +157,13 @@ dist-%: sources-%
 build: build-$(VERSION)
 
 .ONESHELL:
-build-%: dist-%
+build-%: $$(call need_build,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
 	runtime=$$1; build=$$2
 	short=$${current%.*}
-	$(MAKE) --no-print-directory artifacts-link
+	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) 				\
 		--build-arg RUNTIME_IMAGE=$$runtime 					\
 		--build-arg BUILD_IMAGE=$$build 						\
@@ -177,6 +198,4 @@ clean-%:
 
 
 .PHONY: all
-all:
-	@set -e
-	for v in $(VERSIONS); do $(MAKE) test-$$v; done
+all: $(addprefix test-,$(VERSIONS))

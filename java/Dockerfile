@@ -3,6 +3,10 @@ ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG BUILD_IMAGE=dmp/gcc:8.5.0
 ARG BOOT_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BOOT_IMAGE} AS prev
 ARG JAVA_PATH=/opt/java
 
@@ -119,13 +123,15 @@ ARG JAVA_PATH=/opt/java
 COPY --from=builder ${JAVA_PATH} ${JAVA_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG JAVA_PATH=/opt/java
 ARG RUNTIME_APT_DEPS
 
 # устанавливаем собранный jdk в runtime-образ: /opt/java/usr/local/java -> /usr/local/java
-COPY --from=dist ${JAVA_PATH} /
+COPY --from=distimg ${JAVA_PATH} /
 
 # рантайм-библиотеки, с которыми jdk слинкован динамически (шрифты, X11, звук)
 RUN apt-get update                                                  \

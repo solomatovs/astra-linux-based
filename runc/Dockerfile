@@ -2,6 +2,10 @@
 ARG BUILD_IMAGE=dmp/golang:1.22.6
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS base
 FROM base AS dist
 
@@ -34,11 +38,13 @@ RUN set -eux;                                        \
     cd / && rm -rf /tmp/*
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG RUNC_PATH=/opt/runc
 
-COPY --from=dist ${RUNC_PATH} /
+COPY --from=distimg ${RUNC_PATH} /
 RUN printf '%s\n'                       \
         /usr/local/lib                  \
     > /etc/ld.so.conf.d/runc-local.conf \

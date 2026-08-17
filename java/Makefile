@@ -101,6 +101,7 @@ extract-all:		$(addprefix extract-,$(VERSION_CHAIN))
 build-all:		$(addprefix build-,$(VERSION_CHAIN))
 test-all:		$(addprefix test-,$(VERSION_CHAIN))
 clean-all:		$(addprefix clean-,$(VERSION_CHAIN))
+
 # helper: git-тег openjdk -> docker-тег (jdk8u452-ga -> 8u452, jdk-17.0.13-ga -> 17.0.13, jdk-9+181 -> 9-181)
 full_of = $(shell echo '$(1)' | sed -e 's/^jdk-\?//' -e 's/-ga$$//' -e 's/+/-/g')
 
@@ -250,6 +251,7 @@ build-%: $$(call need_build,$$*)
 	full='$(call full_of,$(word 5,$(DEPS_$*)))'
 	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT)						\
+		--build-arg DIST_IMAGE=$(IMAGE):$*-dist	\
 		--build-arg RUNTIME_IMAGE=$$1								\
 		--build-arg BUILD_IMAGE=$$2									\
 		--build-arg BOOT_IMAGE=$$3									\

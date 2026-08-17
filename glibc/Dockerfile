@@ -5,6 +5,10 @@ ARG GCC_IMAGE=registry.astralinux.ru/library/orel:2.12
 
 # надо проверить python образ, существует ли там собранный python /opt/python
 # если он есть, то копируем python в папку /seed
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${PYTHON_IMAGE} AS python
 ARG PYTHON_PATH=/opt/python
 RUN mkdir -p /seed \
@@ -124,12 +128,14 @@ ARG GLIBC_PATH=/opt/glibc
 COPY --from=builder ${GLIBC_PATH} ${GLIBC_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG GLIBC_PATH=/opt/glibc
 ARG GLIBC_VERSION
 # устанавливаем собранный glibc в runtime-образ
-COPY --from=dist ${GLIBC_PATH} /
+COPY --from=distimg ${GLIBC_PATH} /
 
 RUN set -eux \
     && printf '%s\n'        \

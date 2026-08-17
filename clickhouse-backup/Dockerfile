@@ -2,6 +2,10 @@
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG GO_IMAGE=dmp/golang:1.26.5-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${GO_IMAGE} AS go
 
 FROM ${RUNTIME_IMAGE} AS base
@@ -49,12 +53,14 @@ ARG CB_PATH=/opt/clickhouse-backup
 COPY --from=builder ${CB_PATH} ${CB_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG CB_PATH=/opt/clickhouse-backup
 
 # устанавливаем собранный бинарник в runtime-образ
-COPY --from=dist ${CB_PATH} /
+COPY --from=distimg ${CB_PATH} /
 
 # ca-certificates — для выгрузки в S3/GCS/Azure по https, curl — для HEALTHCHECK
 RUN apt-get update                                              \

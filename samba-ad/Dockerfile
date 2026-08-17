@@ -3,6 +3,10 @@ ARG BUILD_IMAGE=dmp/gcc:8.5.0
 ARG PYTHON_IMAGE=dmp/python:3.10-dist
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${RUNTIME_IMAGE} AS glibc
 FROM ${PYTHON_IMAGE}  AS python
 FROM ${BUILD_IMAGE}   AS build
@@ -123,6 +127,11 @@ RUN set -eux \
     && for d in lib lib64 bin sbin; do              \
          [ -e /usr/local/$d ] && cp -a /usr/local/$d ${ROOTFS}/usr/local/ || true; \
        done \
+    && mkdir -p ${ROOTFS}/usr/lib/x86_64-linux-gnu  \
+    && cp -a /usr/lib/x86_64-linux-gnu/libstdc++.so.6*  \
+             /usr/lib/x86_64-linux-gnu/libgcc_s.so.1    \
+             /usr/lib/x86_64-linux-gnu/libatomic.so.1*  \
+             ${ROOTFS}/usr/lib/x86_64-linux-gnu/        \
     && rm -rf ${ROOTFS}/usr/local/lib/gcc   \
               ${ROOTFS}/usr/local/libexec   \
               ${ROOTFS}/usr/local/include   \
@@ -145,12 +154,15 @@ ARG ROOTFS=/opt/rootfs
 COPY --from=builder ${ROOTFS} ${ROOTFS}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG ROOTFS=/opt/rootfs
 ARG RUNTIME_APT_DEPS
 
 ENV PATH=/usr/local/bin:/usr/local/sbin:$PATH
+
 
 # рантайм-зависимости AD DC
 RUN apt-get update                  \
@@ -160,7 +172,11 @@ RUN apt-get update                  \
         /var/lib/apt/lists/*        \
         /var/cache/apt/archives/*
 
-COPY --from=dist ${ROOTFS}/ /
+# дистрибутивный libstdc++ вытесняется библиотекой из тулчейна (CXXABI до 1.3.10),
+# убираем его до наложения rootfs — версия должна остаться одна
+RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1
+
+COPY --from=distimg ${ROOTFS}/ /
 
 COPY ad/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY ad/provision-objects.sh        /docker-entrypoint-init.d/10-provision-objects.sh

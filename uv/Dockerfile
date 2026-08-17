@@ -2,6 +2,10 @@
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG BUILD_IMAGE=dmp/rust:1.90.0
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${RUNTIME_IMAGE} AS base
 FROM ${BUILD_IMAGE} AS builder
 
@@ -89,16 +93,18 @@ ARG UV_PATH=/opt/uv
 COPY --from=builder ${UV_PATH} ${UV_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG UV_PATH=/opt/uv
 ARG UV_VERSION
 
 # устанавливаем собранный uv в runtime-образ
-COPY --from=dist ${UV_PATH} /
+COPY --from=distimg ${UV_PATH} /
 
 # corp nexus
-COPY artifacts/uv-config.toml* /tmp/uvconf/
+COPY uv-config.toml* /tmp/uvconf/
 RUN if [ -f /tmp/uvconf/uv-config.toml ]; then          \
         mkdir -p /etc/uv                                \
         && cp /tmp/uvconf/uv-config.toml /etc/uv/uv.toml; \

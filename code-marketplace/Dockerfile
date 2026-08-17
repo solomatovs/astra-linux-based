@@ -2,6 +2,10 @@
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG GO_IMAGE=dmp/golang:1.25.12-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${GO_IMAGE} AS go
 
 FROM ${RUNTIME_IMAGE} AS base
@@ -48,6 +52,8 @@ ARG CM_PATH=/opt/code-marketplace
 COPY --from=builder ${CM_PATH} ${CM_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG CM_PATH=/opt/code-marketplace
@@ -56,7 +62,7 @@ ARG CM_GID=1000
 ARG CM_EXT_DIR=/var/lib/code-marketplace/extensions
 
 # устанавливаем собранный бинарник в runtime-образ
-COPY --from=dist ${CM_PATH} /
+COPY --from=distimg ${CM_PATH} /
 
 # ca-certificates — для `code-marketplace add https://...`, curl — для HEALTHCHECK
 RUN apt-get update                                            \

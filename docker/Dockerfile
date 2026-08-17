@@ -4,6 +4,10 @@ ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG RUNC_IMAGE=dmp/runc:1.2.6-dist
 ARG CONTAINERD_IMAGE=dmp/containerd:1.7.27-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${RUNC_IMAGE}          AS runc
 FROM ${CONTAINERD_IMAGE}    AS containerd
 
@@ -57,13 +61,15 @@ RUN set -eux;                                       \
     cd / && rm -rf /tmp/*
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG DOCKER_PATH=/opt/docker
 ARG RUNC_PATH=/opt/runc
 ARG CONTAINERD_PATH=/opt/containerd
 
-COPY --from=dist       ${DOCKER_PATH}       /
+COPY --from=distimg       ${DOCKER_PATH}       /
 COPY --from=containerd ${CONTAINERD_PATH}   /
 COPY --from=runc       ${RUNC_PATH}         /
 

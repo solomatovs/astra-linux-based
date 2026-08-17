@@ -3,6 +3,10 @@ ARG BUILD_IMAGE=dmp/gcc:14.2.0-dist
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG CMAKE_IMAGE=dmp/cmake:3.27.9-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${CMAKE_IMAGE} AS cmake
 FROM ${BUILD_IMAGE} AS dist
 
@@ -95,12 +99,14 @@ RUN set -eux;                                                           \
     cd /; rm -rf /tmp/*
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG FLB_PATH=/opt/fluent-bit
 
 # устанавливаем собранный fluent-bit поверх чистого dmp/glibc
-COPY --from=dist ${FLB_PATH} /
+COPY --from=distimg ${FLB_PATH} /
 RUN printf '%s\n'           \
         /usr/local/lib      \
         /usr/local/lib64    \

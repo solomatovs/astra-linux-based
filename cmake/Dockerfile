@@ -2,6 +2,10 @@
 ARG BUILD_IMAGE=dmp/gcc:8.5.0
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS base
 FROM base AS builder
 
@@ -37,19 +41,19 @@ ARG CMAKE_PATH=/opt/cmake
 COPY --from=builder ${CMAKE_PATH} ${CMAKE_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG CMAKE_PATH=/opt/cmake
 
-COPY --from=dist ${CMAKE_PATH} /
+COPY --from=distimg ${CMAKE_PATH} /
 
 # cmake слинкован с libstdc++/libgcc_s компилятора-сборщика (gcc 11, GLIBCXX_3.4.29),
-# в базовом glibc-образе такой libstdc++ нет — берём его из gcc-образа и даём приоритет.
-COPY --from=base /usr/local/lib64/libstdc++.so.6* /usr/local/lib64/libgcc_s.so.1* /usr/local/lib64/
-RUN printf '%s\n'           \
-        /usr/local/lib64    \
-        /usr/local/lib      \
-        > /etc/ld.so.conf.d/cmake-local.conf \
-    && ldconfig
+# в базовом glibc-образе такого нет — берём из gcc-образа вместо дистрибутивных
+# (старый libstdc++ знает CXXABI только до 1.3.10), поэтому сначала убираем их
+RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1
+COPY --from=base /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 /usr/lib/x86_64-linux-gnu/
+RUN ldconfig
 
 ENTRYPOINT [ "/usr/local/bin/cmake" ]

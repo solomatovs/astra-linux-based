@@ -27,6 +27,24 @@ OPENLDAP_URL	?= https://www.openldap.org/software/download/OpenLDAP/openldap-rel
 
 NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
+# FORCE=1 — пересобрать, даже если образ уже есть
+FORCE				?= 0
+
+# уже собранные образы, снимок на момент запуска make
+BUILT				:= $(if $(filter 1,$(FORCE) $(NO_CACHE)),,$(shell docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null))
+built = $(filter $(1),$(BUILT))
+need_build = $(if $(call built,$(call tag,$(1))),,sources artifacts-link)
+
+# второй проход по зависимостям: только там уже известен $* (версия)
+.SECONDEXPANSION:
+# зависимости обновляются слева направо, artifacts-link должен отработать последним
+.NOTPARALLEL:
+
+.PHONY: build-all check-all test-all
+build-all:		$(addprefix build-,$(VERSIONS))
+check-all:		$(addprefix check-,$(VERSIONS))
+test-all:		$(addprefix test-,$(VERSIONS))
+
 # базовый образ и тег результата. подменяются, чтобы поставить модуль
 # поверх образа с другими модулями (цепочка)
 BASE_IMAGE		?=
@@ -99,9 +117,9 @@ sources:
 build: build-$(VERSION)
 
 .ONESHELL:
-build-%: sources
+build-%: $$(call need_build,$$*)
 	@set -e
-	$(MAKE) --no-print-directory artifacts-link
+	[ -z "$(call built,$(call tag,$*))" ] || { echo "  = $(call tag,$*) уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT)					\
 		--build-arg NGINX_VERSION=$*							\
 		--build-arg BASE_IMAGE=$(call base_image,$*)			\
@@ -136,6 +154,4 @@ clean:
 
 
 .PHONY: all
-all:
-	@set -e
-	for v in $(VERSIONS); do $(MAKE) test-$$v; done
+all: $(addprefix test-,$(VERSIONS))

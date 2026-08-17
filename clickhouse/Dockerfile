@@ -6,6 +6,10 @@ ARG PYTHON_IMAGE=dmp/python:3.10-dist
 ARG GCC_IMAGE=dmp/gcc:12.4.0-dist
 ARG LLVM_IMAGE=dmp/llvm:20.1.8-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${CMAKE_IMAGE} AS cmake
 FROM ${PYTHON_IMAGE} AS python
 FROM ${GCC_IMAGE} AS gcc
@@ -86,11 +90,13 @@ ARG CLICKHOUSE_PATH=/opt/clickhouse
 COPY --from=builder ${CLICKHOUSE_PATH} ${CLICKHOUSE_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG CLICKHOUSE_PATH=/opt/clickhouse
 
-COPY --from=dist ${CLICKHOUSE_PATH} /
+COPY --from=distimg ${CLICKHOUSE_PATH} /
 RUN printf '%s\n'           \
         /usr/local/lib      \
         /usr/local/lib64    \

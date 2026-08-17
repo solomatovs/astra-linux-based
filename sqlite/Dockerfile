@@ -12,7 +12,11 @@ ARG SQLITE_PATH=/opt/sqlite
 ARG GCC_PATH=/opt/gcc
 
 # тулчейн из -dist образа gcc: компилятор, binutils и заголовки
+# дистрибутивные libstdc++/libgcc_s вытесняются библиотеками из тулчейна:
+# они лежат в системном каталоге, а не в /usr/local
+RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1
 COPY --from=gcc ${GCC_PATH}/usr/local/ /usr/local/
+COPY --from=gcc ${GCC_PATH}/usr/lib/x86_64-linux-gnu/ /usr/lib/x86_64-linux-gnu/
 COPY --from=gcc /usr/include/ /usr/include/
 RUN ln -sf gcc /usr/local/bin/cc            \
     && ln -sf g++ /usr/local/bin/c++        \

@@ -213,6 +213,7 @@ build-%: $$(call need_build,$$*)
 	if [ "$$5" = "-" ]; then mode=bootstrap; else mode=mrustc; fi
 	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
+		--build-arg DIST_IMAGE=$(IMAGE):$*-dist	\
 		--build-arg RUNTIME_IMAGE=$$1			\
 		--build-arg BUILD_IMAGE=$$2				\
 		--build-arg CMAKE_IMAGE=$$3				\

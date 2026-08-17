@@ -2,6 +2,15 @@
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG BUILD_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
+# системный каталог библиотек. рантайм gcc (libstdc++/libgcc_s/libatomic) кладём
+# туда, а не в /usr/local/lib64: иначе в образе будет две версии libstdc++ —
+# дистрибутивная и собранная — и какая подхватится, зависит от порядка поиска
+ARG SLIBDIR=/usr/lib/x86_64-linux-gnu
+
 FROM ${BUILD_IMAGE} AS prev
 ARG GCC_PATH=/opt/gcc
 
@@ -26,6 +35,7 @@ ARG BINUTILS_VERSION
 ARG MAKE_VERSION
 ARG APT_DEPS
 ARG GCC_PATH=/opt/gcc
+ARG SLIBDIR
 
 
 # копируем gcc из предыдущего образа и обновляем ldconfig если он есть в этом образе
@@ -75,6 +85,14 @@ RUN cd /tmp                                     \
         --with-default-libstdcxx-abi=new            \
     && make -j"$(nproc)"                            \
     && make install-strip DESTDIR=${GCC_PATH}       \
+    && mkdir -p ${GCC_PATH}${SLIBDIR}               \
+    && mv ${GCC_PATH}/usr/local/lib64/libstdc++.so.6*   \
+          ${GCC_PATH}/usr/local/lib64/libgcc_s.so.1     \
+          ${GCC_PATH}/usr/local/lib64/libatomic.so.1*   \
+          ${GCC_PATH}${SLIBDIR}/                    \
+    && ln -sf ${SLIBDIR}/libstdc++.so.6 ${GCC_PATH}/usr/local/lib64/libstdc++.so  \
+    && ln -sf ${SLIBDIR}/libgcc_s.so.1  ${GCC_PATH}/usr/local/lib64/libgcc_s.so   \
+    && ln -sf ${SLIBDIR}/libatomic.so.1 ${GCC_PATH}/usr/local/lib64/libatomic.so  \
     && cd /                                         \
     && rm -rf /tmp/gcc-build /tmp/gcc-${GCC_VERSION}
 
@@ -113,13 +131,21 @@ COPY --from=builder ${GCC_PATH} ${GCC_PATH}
 COPY --from=builder /usr/include/ /usr/include/
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG GCC_PATH=/opt/gcc
+ARG SLIBDIR
+
+# дистрибутивные libstdc++/libgcc_s вытесняются собранными (старый libstdc++ знает
+# CXXABI только до 1.3.10), убираем их до установки — версия должна остаться одна
+RUN rm -f ${SLIBDIR}/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1
+
 # устанавливаем собранный gcc в runtime-образ, чтобы собирать C/C++-приложения
-COPY --from=dist ${GCC_PATH} /
+COPY --from=distimg ${GCC_PATH} /
 # заголовки и библиотеки из промежуточного образа
-COPY --from=dist /usr/include/ /usr/include/
+COPY --from=distimg /usr/include/ /usr/include/
 
 # cc/c++ алиасы + binutils в PATH
 RUN ln -sf gcc /usr/local/bin/cc            \

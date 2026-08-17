@@ -263,6 +263,7 @@ build-%: $$(call need_build,$$*)
 	major=$${current%%.*}
 	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT)					\
+		--build-arg DIST_IMAGE=$(IMAGE):$*-dist	\
 		--build-arg RUNTIME_IMAGE=$$1							\
 		--build-arg GO_IMAGE=$$2								\
 		--build-arg CB_VERSION=$$current						\

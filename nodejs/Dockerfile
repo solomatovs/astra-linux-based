@@ -5,6 +5,10 @@ ARG PYTHON_IMAGE=dmp/python:3.10-dist
 ARG GCC_IMAGE=dmp/gcc:12.4.0-dist
 ARG LLVM_IMAGE=dmp/llvm:20.1.8-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${PYTHON_IMAGE}    AS python
 FROM ${GCC_IMAGE}       AS gcc
 FROM ${LLVM_IMAGE}      AS llvm
@@ -83,19 +87,20 @@ ARG NODE_PATH=/opt/nodejs
 COPY --from=builder ${NODE_PATH} ${NODE_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG NODE_PATH=/opt/nodejs
 ARG GCC_PATH=/opt/gcc
 
-COPY --from=dist ${NODE_PATH} /
+COPY --from=distimg ${NODE_PATH} /
 
-COPY --from=gcc ${GCC_PATH}/usr/local/lib64/libstdc++.so.6* ${GCC_PATH}/usr/local/lib64/libgcc_s.so.1* ${GCC_PATH}/usr/local/lib64/libatomic.so.1* /usr/local/lib64/
-RUN printf '%s\n'           \
-        /usr/local/lib64    \
-        /usr/local/lib      \
-    > /etc/ld.so.conf.d/nodejs-local.conf \
-    && ldconfig
+# дистрибутивные libstdc++/libgcc_s вытесняются библиотеками из тулчейна
+# (старый libstdc++ знает CXXABI только до 1.3.10) — убираем их до копирования
+RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1
+COPY --from=gcc ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libstdc++.so.6* ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libgcc_s.so.1 ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libatomic.so.1* /usr/lib/x86_64-linux-gnu/
+RUN ldconfig
 
 COPY npmrc* /tmp/npmrc/
 RUN if [ -f /tmp/npmrc/npmrc ]; then \

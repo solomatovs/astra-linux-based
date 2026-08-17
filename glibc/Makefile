@@ -140,6 +140,9 @@ debug:
 .PHONY: artifacts-link
 artifacts-link:
 	@set -e
+	# каталог должен быть в контексте всегда: COPY artifacts/apt-bootstrap*
+	# с нулевым совпадением ломает сборку
+	mkdir -p "$(APT_DEB_DIR)"
 	if [ ! -d "$(ARTIFACTS)" ]; then
 		if [ -n "$$(ls -A '$(LINKED_ARTIFACTS)' 2>/dev/null)" ]; then
 			echo "  ! $(ARTIFACTS) не найден, а $(LINKED_ARTIFACTS) не пуст" >&2
@@ -216,6 +219,7 @@ build-%: $$(call need_build,$$*)
 	set -- $(DEPS_$*)
 	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
+		--build-arg DIST_IMAGE=$(IMAGE):$*-dist	\
 		--build-arg RUNTIME_IMAGE=$$1			\
 		--build-arg GLIBC_VERSION=$$current		\
 		--build-arg PYTHON_IMAGE=$$2			\

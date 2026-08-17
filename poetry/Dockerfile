@@ -1,6 +1,10 @@
 # poetry
 ARG RUNTIME_IMAGE=dmp/python:3.13
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${RUNTIME_IMAGE} AS base
 FROM base AS builder
 
@@ -54,13 +58,15 @@ ARG POETRY_PATH=/opt/poetry
 COPY --from=builder ${POETRY_PATH} ${POETRY_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG POETRY_PATH=/opt/poetry
 ARG POETRY_VERSION
 
 # устанавливаем собранный poetry в runtime-образ
-COPY --from=dist ${POETRY_PATH} /
+COPY --from=distimg ${POETRY_PATH} /
 
 # corp nexus: глобальный конфиг poetry (репозитории, virtualenvs) и логин/пароль
 # к ним. Реальные файлы — poetry-config.toml и poetry-auth.toml рядом с Dockerfile

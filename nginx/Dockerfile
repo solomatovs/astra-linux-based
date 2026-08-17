@@ -2,6 +2,10 @@
 ARG BUILD_IMAGE=dmp/gcc:8.5.0-dist
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS dist
 
 ARG APT_DEPS
@@ -113,12 +117,14 @@ RUN set -eux;                                                            \
     rm -rf /tmp/src
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG NGINX_PATH=/opt/nginx
 
 # устанавливаем собранный nginx поверх dmp/glibc
-COPY --from=dist ${NGINX_PATH} /
+COPY --from=distimg ${NGINX_PATH} /
 
 # системный пользователь nginx + логи в stdout/stderr контейнера
 RUN groupadd -r nginx --gid=101                                           \

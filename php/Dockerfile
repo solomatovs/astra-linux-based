@@ -2,6 +2,10 @@
 ARG BUILD_IMAGE=dmp/gcc:8.5.0-dist
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS builder
 
 ARG PHP_VERSION
@@ -147,6 +151,8 @@ ARG PHP_PATH=/opt/php
 COPY --from=builder ${PHP_PATH} ${PHP_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG PHP_PATH=/opt/php
@@ -160,11 +166,11 @@ RUN if [ -n "${RUNTIME_APT_DEPS}" ]; then                                   \
         && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*;           \
     fi
 
-COPY --from=dist ${PHP_PATH} /
+COPY --from=distimg ${PHP_PATH} /
 RUN ldconfig
 
 # php.ini
-COPY artifacts/php.ini* /tmp/phpini/
+COPY php.ini* /tmp/phpini/
 RUN if [ -f /tmp/phpini/php.ini ]; then                 \
         cp /tmp/phpini/php.ini /usr/local/lib/php.ini;  \
     fi                                                  \
@@ -176,7 +182,7 @@ RUN chmod +x /usr/local/bin/composer \
     && mkdir -p /usr/local/composer
 
 # corp nexus
-COPY artifacts/composer-config.json* /tmp/composerconf/
+COPY composer-config.json* /tmp/composerconf/
 RUN if [ -f /tmp/composerconf/composer-config.json ]; then                          \
         cp /tmp/composerconf/composer-config.json /usr/local/composer/config.json;  \
     fi                                                                              \

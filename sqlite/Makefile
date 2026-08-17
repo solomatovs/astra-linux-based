@@ -38,6 +38,29 @@ IMAGE			:= dmp/sqlite
 FIRST_VERSION	:= $(firstword $(VERSION_CHAIN))
 NO_CACHE_TEXT	:= $(if $(filter 1,$(NO_CACHE)),--no-cache,)
 
+# FORCE=1 — пересобрать, даже если образ уже есть
+FORCE				?= 0
+
+# уже собранные образы, снимок на момент запуска make
+BUILT				:= $(if $(filter 1,$(FORCE) $(NO_CACHE)),,$(shell docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null))
+built = $(filter $(1),$(BUILT))
+need_dist = $(if $(call built,$(IMAGE):$(1)-dist),,sources-$(1) artifacts-link)
+need_build = $(if $(call built,$(IMAGE):$(1)),,dist-$(1) artifacts-link)
+
+# второй проход по зависимостям: только там уже известен $* (версия)
+.SECONDEXPANSION:
+# зависимости обновляются слева направо, artifacts-link должен отработать последним
+.NOTPARALLEL:
+
+.PHONY: build-all clean-all deps-all dist-all extract-all sources-all test-all
+build-all:		$(addprefix build-,$(VERSION_CHAIN))
+clean-all:		$(addprefix clean-,$(VERSION_CHAIN))
+deps-all:		$(addprefix deps-,$(VERSION_CHAIN))
+dist-all:		$(addprefix dist-,$(VERSION_CHAIN))
+extract-all:		$(addprefix extract-,$(VERSION_CHAIN))
+sources-all:		$(addprefix sources-,$(VERSION_CHAIN))
+test-all:		$(addprefix test-,$(VERSION_CHAIN))
+
 
 .PHONY: help
 help:
@@ -154,11 +177,11 @@ deps-%:
 dist: dist-$(VERSION)
 
 .ONESHELL:
-dist-%: sources-%
+dist-%: $$(call need_dist,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	$(MAKE) --no-print-directory artifacts-link
+	[ -z "$(call built,$(IMAGE):$*-dist)" ] || { echo "  = $(IMAGE):$*-dist уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist	\
 		--build-arg RUNTIME_IMAGE=$$1				\
 		--build-arg BUILD_IMAGE=$$2					\
@@ -195,12 +218,12 @@ extract-%: dist-%
 build: build-$(VERSION)
 
 .ONESHELL:
-build-%: dist-%
+build-%: $$(call need_build,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
 	major=$${current%.*}
-	$(MAKE) --no-print-directory artifacts-link
+	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT)		\
 		--build-arg RUNTIME_IMAGE=$$1				\
 		--build-arg BUILD_IMAGE=$$2					\

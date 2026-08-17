@@ -5,6 +5,10 @@ ARG PYTHON_IMAGE=dmp/python:3.10-dist
 ARG BUILDX_IMAGE=dmp/docker-buildx:0.30.0-dist
 ARG COMPOSE_IMAGE=dmp/docker-compose:2.38.2-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${GCC_IMAGE}       AS gcc
 FROM ${PYTHON_IMAGE}    AS python
 FROM ${BUILDX_IMAGE}    AS buildx
@@ -23,7 +27,11 @@ ARG PYTHON_PATH=/opt/python
 
 RUN cp -a /opt/nodejs/usr/local/. /usr/local/
 
+# дистрибутивные libstdc++/libgcc_s вытесняются библиотеками из тулчейна:
+# они лежат в системном каталоге, а не в /usr/local
+RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1
 COPY --from=gcc ${GCC_PATH}/usr/local/ /usr/local/
+COPY --from=gcc ${GCC_PATH}/usr/lib/x86_64-linux-gnu/ /usr/lib/x86_64-linux-gnu/
 COPY --from=gcc /usr/include/ /usr/include/
 COPY --from=python ${PYTHON_PATH}/usr/local/ /usr/local/
 COPY npmrc* /tmp/npmrc/
@@ -160,6 +168,8 @@ ARG CS_PATH=/opt/code-server
 COPY --from=builder ${CS_PATH} ${CS_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG CS_VERSION
@@ -171,9 +181,9 @@ ARG COMPOSE_PATH=/opt/docker-compose
 ARG CS_UID=1000
 ARG CS_GID=1000
 
-COPY --from=dist ${CS_PATH}/usr/local/lib/code-server ${CS_DIR}/code-server
+COPY --from=distimg ${CS_PATH}/usr/local/lib/code-server ${CS_DIR}/code-server
 COPY --from=builder /opt/nodejs/usr/local ${CS_DIR}/third/node
-COPY --from=gcc ${GCC_PATH}/usr/local/lib64/libstdc++.so.6* ${GCC_PATH}/usr/local/lib64/libgcc_s.so.1* ${GCC_PATH}/usr/local/lib64/libatomic.so.1* ${CS_DIR}/third/lib/
+COPY --from=gcc ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libstdc++.so.6* ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libgcc_s.so.1 ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libatomic.so.1* ${CS_DIR}/third/lib/
 COPY npmrc* /tmp/npmrc/
 COPY conf/ /tmp/conf/
 COPY --from=buildx  ${BUILDX_PATH}  /
@@ -193,10 +203,10 @@ RUN set -eux                                                                    
     && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen                                                                      \
     && locale-gen en_US.UTF-8                                                                                                  \
     && groupadd -g ${CS_GID} coder                                                                                             \
+    && mkdir -p ${CS_DIR}/conf ${CS_DIR}/data/home ${CS_DIR}/data/user-data ${CS_DIR}/data/extensions ${CS_DIR}/third/node/etc \
     && useradd -u ${CS_UID} -g ${CS_GID} -G sudo -m -d ${CS_DIR}/data/home -s /bin/bash coder                                  \
     && printf '%s\n' 'coder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/coder                                                    \
     && chmod 0440 /etc/sudoers.d/coder                                                                                         \
-    && mkdir -p ${CS_DIR}/conf ${CS_DIR}/data/home ${CS_DIR}/data/user-data ${CS_DIR}/data/extensions ${CS_DIR}/third/node/etc \
     && if [ -f /tmp/npmrc/npmrc ]; then cp /tmp/npmrc/npmrc ${CS_DIR}/third/node/etc/npmrc; fi                                 \
     && rm -rf /tmp/npmrc                                                                                                       \
     && chmod +x ${CS_DIR}/code-server/bin/code-server                                                                          \

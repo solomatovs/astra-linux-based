@@ -2,6 +2,10 @@
 ARG RUNTIME_IMAGE=dmp/nodejs:22
 ARG CCR_PATH=/opt/claude-code-router
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${RUNTIME_IMAGE} AS base
 FROM base AS dist
 
@@ -36,13 +40,15 @@ RUN set -eux;                                                                   
     rm -rf /tmp/*
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG CCR_PATH
 ARG CCR_UID=1000
 ARG CCR_GID=1000
 
-COPY --from=dist ${CCR_PATH} /
+COPY --from=distimg ${CCR_PATH} /
 
 # Непривилегированный пользователь
 RUN groupadd -g ${CCR_GID} ccr \

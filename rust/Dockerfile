@@ -9,6 +9,10 @@ ARG PYTHON_IMAGE=dmp/python:3.10-dist
 # ветка выбирается через FROM build-${BUILD_MODE}, неиспользуемая стадия не собирается
 ARG BUILD_MODE=mrustc
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS prev
 ARG RUST_PATH=/opt/rust
 
@@ -259,11 +263,13 @@ ARG RUST_PATH=/opt/rust
 COPY --from=builder ${RUST_PATH}/usr/local ${RUST_PATH}/usr/local
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG RUST_PATH=/opt/rust
 
-COPY --from=dist ${RUST_PATH}/usr/local /usr/local
+COPY --from=distimg ${RUST_PATH}/usr/local /usr/local
 
 # rustc/cargo (rust-бинари) линкуют libstd.so
 # кладём rust-lib-каталоги в ldconfig
@@ -274,7 +280,7 @@ RUN printf '%s\n' \
     && ldconfig
 
 # corp nexus
-COPY artifacts/cargo-config.toml* /tmp/cargoconf/
+COPY cargo-config.toml* /tmp/cargoconf/
 RUN if [ -f /tmp/cargoconf/cargo-config.toml ]; then \
         mkdir -p /usr/local/cargo && cp /tmp/cargoconf/cargo-config.toml /usr/local/cargo/config.toml; \
     fi \

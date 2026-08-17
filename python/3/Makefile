@@ -175,6 +175,7 @@ build-%: $$(call need_build,$$*)
 	short=$${current%.*}
 	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) \
+		--build-arg DIST_IMAGE=$(IMAGE):$*-dist	\
 		--build-arg RUNTIME_IMAGE=$$runtime 	\
 		--build-arg BUILD_IMAGE=$$build 		\
 		--build-arg PYTHON_VERSION=$$current 	\

@@ -2,6 +2,10 @@
 ARG BUILD_IMAGE=dmp/golang:1.24.5
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS base
 FROM base AS dist
 
@@ -26,10 +30,12 @@ RUN set -eux;                                       \
     cd / && rm -rf /tmp/*
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG COMPOSE_PATH=/opt/docker-compose
 
-COPY --from=dist ${COMPOSE_PATH} /
+COPY --from=distimg ${COMPOSE_PATH} /
 
 ENTRYPOINT [ "/usr/local/bin/docker-compose" ]

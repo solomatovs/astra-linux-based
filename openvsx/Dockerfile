@@ -4,6 +4,10 @@ ARG BUILD_IMAGE=dmp/java:17
 ARG NODE_IMAGE=dmp/nodejs:22.22.1-dist
 ARG GCC_IMAGE=dmp/gcc:12.4.0-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${NODE_IMAGE}      AS node
 FROM ${GCC_IMAGE}       AS gcc
 FROM ${BUILD_IMAGE}     AS base
@@ -17,12 +21,11 @@ ARG GCC_PATH=/opt/gcc
 
 # node для сборки webui; его libstdc++ новее системной — берем из того же тулчейна
 COPY --from=node ${NODE_PATH}/usr/local/ /usr/local/
-COPY --from=gcc ${GCC_PATH}/usr/local/lib64/libstdc++.so.6* ${GCC_PATH}/usr/local/lib64/libgcc_s.so.1* ${GCC_PATH}/usr/local/lib64/libatomic.so.1* /usr/local/lib64/
-RUN printf '%s\n'                                   \
-        /usr/local/lib64                            \
-        /usr/local/lib                              \
-        > /etc/ld.so.conf.d/openvsx-local.conf      \
-    && ldconfig
+# дистрибутивные libstdc++/libgcc_s вытесняются библиотеками из тулчейна
+# (старый libstdc++ знает CXXABI только до 1.3.10) — убираем их до копирования
+RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1
+COPY --from=gcc ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libstdc++.so.6* ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libgcc_s.so.1 ${GCC_PATH}/usr/lib/x86_64-linux-gnu/libatomic.so.1* /usr/lib/x86_64-linux-gnu/
+RUN ldconfig
 
 
 # patch — накатывание patches/ на исходники
@@ -90,6 +93,8 @@ ARG OVSX_PATH=/opt/openvsx
 COPY --from=builder ${OVSX_PATH} ${OVSX_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG OVSX_VERSION
@@ -109,7 +114,7 @@ RUN groupadd -g ${OVSX_GID} openvsx \
     && mkdir -p /home/openvsx/storage \
     && chown -R openvsx:openvsx /home/openvsx
 
-COPY --from=dist --chown=openvsx:openvsx ${OVSX_PATH}/server /home/openvsx/server
+COPY --from=distimg --chown=openvsx:openvsx ${OVSX_PATH}/server /home/openvsx/server
 
 # конфиг по умолчанию; в рантайме переопределяется SPRING_*/OVSX_* переменными
 # окружения или монтированием своего файла поверх (см. config/application.yml)

@@ -4,6 +4,10 @@ ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG CMAKE_IMAGE=dmp/cmake:3.27.9-dist
 ARG PYTHON_IMAGE=dmp/python:3.10-dist
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${CMAKE_IMAGE} AS cmake
 FROM ${PYTHON_IMAGE} AS python
 FROM ${BUILD_IMAGE} AS base
@@ -71,11 +75,13 @@ ARG LLVM_PATH=/opt/llvm
 COPY --from=builder ${LLVM_PATH} ${LLVM_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG LLVM_PATH=/opt/llvm
 
-COPY --from=dist ${LLVM_PATH} /
+COPY --from=distimg ${LLVM_PATH} /
 RUN printf '%s\n'           \
         /usr/local/lib      \
         /usr/local/lib64    \

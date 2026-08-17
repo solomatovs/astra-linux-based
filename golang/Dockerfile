@@ -2,6 +2,10 @@
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 ARG BUILD_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS prev
 ARG GO_PATH=/opt/go
 
@@ -63,11 +67,13 @@ ARG GO_PATH=/opt/go
 COPY --from=builder ${GO_PATH} ${GO_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM base AS runtime
 
 ARG GO_PATH=/opt/go
 # устанавливаем собранный go в runtime-образ, чтобы собирать go-приложения
-COPY --from=dist ${GO_PATH} /
+COPY --from=distimg ${GO_PATH} /
 
 COPY go-env* /tmp/goenv/
 RUN if [ -f /tmp/goenv/go-env ]; then           \

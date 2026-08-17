@@ -2,6 +2,10 @@
 ARG BUILD_IMAGE=dmp/gcc:8.5.0
 ARG RUNTIME_IMAGE=dmp/glibc:2.28
 
+# runtime берёт дистрибутив из готового -dist образа (--build-arg DIST_IMAGE),
+# иначе стадия builder компилировалась бы заново
+ARG DIST_IMAGE=scratch
+
 FROM ${BUILD_IMAGE} AS builder
 
 ARG PYTHON_VERSION
@@ -57,9 +61,11 @@ ARG PYTHON_PATH=/opt/python
 COPY --from=builder ${PYTHON_PATH} ${PYTHON_PATH}
 
 
+FROM ${DIST_IMAGE} AS distimg
+
 FROM ${RUNTIME_IMAGE} AS runtime
 
-COPY --from=dist /opt/python /
+COPY --from=distimg /opt/python /
 
 RUN ldconfig
 
