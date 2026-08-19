@@ -128,7 +128,52 @@ RUN cd /tmp                                     \
 FROM base AS dist
 ARG GCC_PATH=/opt/gcc
 COPY --from=builder ${GCC_PATH} ${GCC_PATH}
-COPY --from=builder /usr/include/ /usr/include/
+# Из builder нужны заголовки ядра (linux/, asm/) и apt-зависимостей сборки (zlib.h и
+# прочее) — в базовом образе их нет. А вот заголовки libc обязаны остаться из base:
+# в builder их принес дистрибутивный libc6-dev (Debian 9, glibc 2.24), тогда как
+# библиотека здесь собранная. Рассинхрон ловится не тут, а у потребителей: configure
+# находит символ линковкой (explicit_bzero, memfd_create), прототипа в заголовке нет,
+# и сборка падает на -Werror=implicit-function-declaration.
+#
+# Мало копировать с -n: собранный glibc кладет свои заголовки в /usr/include/{bits,sys,gnu},
+# а libc6-dev — в мультиарх /usr/include/x86_64-linux-gnu/{bits,sys,gnu}, который gcc
+# просматривает ПЕРВЫМ, так что дистрибутивные все равно победили бы. Поэтому мультиарх
+# чистим от того, что принадлежит libc6-dev, и оставляем ядерные (asm/) и библиотечные
+# (openssl/, ffi.h) заголовки. Проверка после правки: в dist-образе
+# `grep -c explicit_bzero /usr/include/string.h` = 1, а `gcc` собирает программу
+# с explicit_bzero/MFD_CLOEXEC
+COPY --from=builder /usr/include/ /tmp/builder-include/
+RUN rm -rf /tmp/builder-include/x86_64-linux-gnu/bits          \
+           /tmp/builder-include/x86_64-linux-gnu/gnu           \
+           /tmp/builder-include/x86_64-linux-gnu/sys           \
+           /tmp/builder-include/x86_64-linux-gnu/a.out.h       \
+           /tmp/builder-include/x86_64-linux-gnu/fpu_control.h \
+           /tmp/builder-include/x86_64-linux-gnu/ieee754.h     \
+    && cp -an /tmp/builder-include/. /usr/include/             \
+    && rm -rf /tmp/builder-include
+
+# Восстановленные заголовки надо еще и защитить: у потребителей apt ставит -dev пакеты
+# (libssl-dev и подобные), те тянут дистрибутивный libc6-dev — и все повторяется.
+# Тот же прием, что в glibc/Dockerfile: регистрируем в dpkg ПУСТОЙ пакет libc6-dev
+# с версией собранной glibc, тогда apt считает зависимость удовлетворенной.
+# Заголовки ядра (linux/*, asm/*) уже скопированы выше — иначе их пришлось бы
+# доставлять отдельно, как это делает glibc (linux-libc-dev)
+RUN set -eux;                                                       \
+    v="$(ldd --version | head -1 | sed 's/.*[[:space:]]//')";       \
+    mkdir -p /tmp/fake-libc6-dev/DEBIAN;                            \
+    printf '%s\n'                                                   \
+        'Package: libc6-dev'                                        \
+        "Version: $v"                                               \
+        'Architecture: amd64'                                       \
+        'Maintainer: local'                                         \
+        'Provides: libc-dev'                                        \
+        'Multi-Arch: same'                                          \
+        "Description: dummy libc6-dev protecting source-built glibc $v headers" \
+        > /tmp/fake-libc6-dev/DEBIAN/control;                       \
+    dpkg-deb --build /tmp/fake-libc6-dev /tmp/libc6-dev.deb;        \
+    dpkg -i /tmp/libc6-dev.deb;                                     \
+    apt-mark hold libc6-dev;                                        \
+    rm -rf /tmp/fake-libc6-dev /tmp/libc6-dev.deb
 
 
 FROM ${DIST_IMAGE} AS distimg

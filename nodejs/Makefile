@@ -18,6 +18,12 @@ VERSION      		?= $(lastword $(VERSION_CHAIN))
 BASE_URL			?= https://nodejs.org/dist
 # базовый url адрес для скачивания пакета pnpm из npm-реестра
 PNPM_URL			?= https://registry.npmjs.org/pnpm/-
+# npm-реестр и образ с npm для вендоринга vite (используется только на этапе sources).
+# NPM_IMAGE — любой уже собранный образ этого же проекта; кэш от версии node не зависит
+NPM_REGISTRY		?= https://registry.npmjs.org/
+NPM_IMAGE			?= $(IMAGE):22
+# базовый url для wasm-сборки rollup (версия определяется по дереву vite, см. sources)
+ROLLUP_WASM_URL		?= https://registry.npmjs.org/@rollup/wasm-node/-
 # выполнять ли сброс кэша: docker build --no-cache
 NO_CACHE			?= 0
 
@@ -29,18 +35,21 @@ LLVM_IMAGE			?= dmp/llvm:20.1.8-dist
 CMAKE_IMAGE			?= dmp/cmake:3.27.9-dist
 
 # зависимости для сборки разных версии
-# cc:  clang | gcc  — старый V8 (node <=16) не собирается clang 20, ему нужен gcc
-# py2: 0 | 1        — node 8/10/12 требуют python2 для configure/gyp
-# версия           runtime_image	build_image		python_image	gcc_image		llvm_image		cc		py2	pnpm
-DEPS_8.17.0		:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		1	3.8.1
-DEPS_10.24.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		1	5.18.10
-DEPS_12.22.12	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		1	6.35.1
-DEPS_14.21.3	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		0	7.33.7
-DEPS_16.20.2	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		0	8.15.9
-DEPS_18.20.5	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
-DEPS_20.18.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
-DEPS_22.11.0	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
-DEPS_22.22.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0
+# cc:   clang | gcc  — старый V8 (node <=16) не собирается clang 20, ему нужен gcc
+# py2:  0 | 1        — node 8/10/12 требуют python2 для configure/gyp
+# vite: версия | -   — ставится глобально рядом с npm/pnpm; «-» = не ставить.
+#       vite 6 требует node ^18||^20||>=22, vite 7/8 — node ^20.19||>=22.12,
+#       поэтому 22.11.0 и ниже получают vite 6, а 22.22.1 — vite 7
+# версия           runtime_image	build_image		python_image	gcc_image		llvm_image		cc		py2	pnpm		vite
+DEPS_8.17.0		:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		1	3.8.1		-
+DEPS_10.24.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		1	5.18.10		-
+DEPS_12.22.12	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		1	6.35.1		-
+DEPS_14.21.3	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		0	7.33.7		-
+DEPS_16.20.2	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC10_IMAGE)	$(LLVM_IMAGE)	gcc		0	8.15.9		-
+DEPS_18.20.5	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0		6.4.3
+DEPS_20.18.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0		6.4.3
+DEPS_22.11.0	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0		6.4.3
+DEPS_22.22.1	:= $(GLIBC_IMAGE)	$(GLIBC_IMAGE)	$(PYTHON_IMAGE)	$(GCC_IMAGE)	$(LLVM_IMAGE)	clang	0	9.15.0		7.3.6
 
 # базовое название для образа
 IMAGE			:= dmp/nodejs
@@ -85,12 +94,15 @@ help:
 	@echo "  make sources    скачать исходники для $(VERSION)"
 	@echo "  make dist       собрать -dist образ $(VERSION) (звенья цепочки — если нужны)"
 	@echo "  make build      собрать образ $(IMAGE)"
-	@echo "  make test       проверить образ $(IMAGE): node, npm, npx, pnpm, запуск скриптов"
+	@echo "  make test       проверить образ $(IMAGE): node, npm, npx, pnpm, vite, запуск скриптов"
 	@echo ""
 	@echo "  Цепочка: $(VERSION_CHAIN)"
 	@echo "  node 18+ собирается clang-ом (dmp/llvm), node <=16 — gcc (dmp/gcc); рантайм — dmp/glibc."
 	@echo "  Каждый образ тегируется полной и короткой версией (напр. 22.11.0 и 22)."
-	@echo "  Зависимости (runtime_image/build_image/python_image/gcc_image/llvm_image/cc/py2/pnpm) задаются пословно в DEPS_<версия>."
+	@echo "  Зависимости (runtime_image/build_image/python_image/gcc_image/llvm_image/cc/py2/pnpm/vite) задаются пословно в DEPS_<версия>."
+	@echo "  vite ставится глобально рядом с npm/pnpm (vite=- — не ставить); его зависимости"
+	@echo "  вендорятся на make sources в $(ARTIFACTS)/src/vite/ образом NPM_IMAGE=$(NPM_IMAGE)."
+	@echo "  rollup 4 в нем подменяется wasm-сборкой: нативный биндинг требует glibc >= 2.29."
 	@echo "  Другая версия: make all VERSION=22.11.0"
 	@echo ""
 	@echo "  make <стадия>-all  то же для всех версий из VERSION_CHAIN"
@@ -148,6 +160,49 @@ sources-%:
 	mkdir -p $(ARTIFACTS)/src
 	[ -f "$(ARTIFACTS)/src/node-v$$current.tar.xz" ] || curl -v -o "$(ARTIFACTS)/src/node-v$$current.tar.xz" "$(BASE_URL)/v$$current/node-v$$current.tar.xz"
 	[ -f "$(ARTIFACTS)/src/pnpm-$$8.tgz" ] || curl -v -o "$(ARTIFACTS)/src/pnpm-$$8.tgz" "$(PNPM_URL)/pnpm-$$8.tgz"
+	# vite тянет дерево зависимостей, поэтому вендорится не тарболом, а npm-кэшем:
+	# docker-сборка потом ставит его с npm install -g --offline.
+	# каталог создается всегда — Dockerfile копирует его безусловно
+	vite_dir="$(ARTIFACTS)/src/vite"
+	mkdir -p "$$vite_dir"
+	touch "$$vite_dir/.keep"
+	vite="$$9"
+	if [ "$$vite" != "-" ] && [ ! -f "$$vite_dir/vite-cache-$$vite.tar.gz" ]; then
+		command -v docker >/dev/null || { echo "  ! нужен docker: кэш vite наполняется в $(NPM_IMAGE)" >&2; exit 1; }
+		docker image inspect $(NPM_IMAGE) >/dev/null 2>&1 || {
+			echo "  ! нет образа $(NPM_IMAGE) — соберите любое звено с npm и укажите NPM_IMAGE=<образ>" >&2
+			exit 1
+		}
+		tmp=$$(mktemp -d)
+		trap 'rm -rf "$$tmp"' EXIT
+		# npmrc для Nexus подключается как ~/.npmrc; без него — прямой реестр.
+		# --user: иначе кэш создается от root
+		if [ -f "$(ARTIFACTS)/npmrc" ]; then
+			reg="-v $(ARTIFACTS)/npmrc:/tmp/.npmrc:ro"
+		else
+			reg="-e npm_config_registry=$(NPM_REGISTRY)"
+		fi
+		docker run --rm								\
+			--user "$$(id -u):$$(id -g)"			\
+			-v "$$tmp:/w" -w /w						\
+			-e HOME=/tmp							\
+			-e npm_config_cache=/w/cache			\
+			$$reg									\
+			--entrypoint npm						\
+			$(NPM_IMAGE) install -g --prefix /w/prefix "vite@$$vite" --no-audit --no-fund
+		tar -czf "$$vite_dir/vite-cache-$$vite.tar.gz" -C "$$tmp" cache
+		du -h "$$vite_dir/vite-cache-$$vite.tar.gz"
+		# rollup 4 (vite 5+) имеет только нативный биндинг, которому нужен glibc >= 2.29,
+		# а рантайм — 2.28. качаем его же wasm-сборку, Dockerfile ей подменит rollup.
+		# vite 4 тянет rollup 3 (чистый JS) — там подмена не нужна
+		rollup_version=$$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+			"$$tmp/prefix/lib/node_modules/vite/node_modules/rollup/package.json")
+		echo "  vite $$vite -> rollup $$rollup_version"
+		case "$$rollup_version" in
+			[123].*)	echo "  rollup $$rollup_version без нативных биндингов — wasm не нужен" ;;
+			*)			curl -fvL -o "$$vite_dir/rollup-wasm-$$vite.tgz" "$(ROLLUP_WASM_URL)/wasm-node-$$rollup_version.tgz" ;;
+		esac
+	fi
 
 
 # docker build --target dist - дистрибутив с скомпилированными исходниками (без установки в систему)
@@ -171,6 +226,7 @@ dist-%: $$(call need_dist,$$*)
 		--build-arg NODE_CC=$$6 			\
 		--build-arg NODE_PY2=$$7 			\
 		--build-arg PNPM_VERSION=$$8 		\
+		--build-arg VITE_VERSION=$$9 		\
 		--tag $(IMAGE):$$current-dist 		\
 		--tag $(IMAGE):$$major-dist 		\
 		--progress plain $(BUILD_CONTEXT)
@@ -198,6 +254,7 @@ build-%: $$(call need_build,$$*)
 		--build-arg NODE_CC=$$6					\
 		--build-arg NODE_PY2=$$7				\
 		--build-arg PNPM_VERSION=$$8			\
+		--build-arg VITE_VERSION=$$9			\
 		--tag $(IMAGE):$$current				\
 		--tag $(IMAGE):$$major					\
 		--progress plain $(BUILD_CONTEXT)
@@ -210,12 +267,25 @@ test: test-$(VERSION)
 .ONESHELL:
 test-%: build-%
 	@current=$(*)
-	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro $(IMAGE):$$current -euc '\
+	set -- $(DEPS_$*)
+	docker run --rm --entrypoint /bin/bash -v $(TEST_DIR):/test:ro -e VITE_VERSION="$$9" $(IMAGE):$$current -euc '\
 		echo "== versions =="; 			\
 		node --version; 				\
 		npm --version; 					\
 		npx --version; 					\
 		pnpm --version; 				\
+		if [ "$$VITE_VERSION" = "-" ]; then \
+			echo "vite: не ставится для этой версии node"; \
+		else 							\
+			vite --version; 			\
+			echo "== vite build (офлайн, без node_modules проекта) =="; \
+			mkdir -p /tmp/vdemo/src && cp -r /test/vitedemo/. /tmp/vdemo/ && cd /tmp/vdemo \
+			&& vite build 				\
+			&& test -f dist/index.html 	\
+			&& ls dist/assets 			\
+			&& echo "  ok    статический бандл собран"; \
+			cd /; 						\
+		fi; 							\
 		command -v corepack >/dev/null && corepack --version || echo "corepack: n/a"; \
 		echo "== which =="; 			\
 		command -v node; command -v npm; command -v npx; command -v pnpm; command -v pnpx; \
@@ -242,6 +312,7 @@ clean-%:
 	set -- $(DEPS_$*)
 	rm -f "$(ARTIFACTS)/src/node-v$$current.tar.xz"
 	rm -f "$(ARTIFACTS)/src/pnpm-$$8.tgz"
+	[ "$$9" = "-" ] || rm -f "$(ARTIFACTS)/src/vite/vite-cache-$$9.tar.gz" "$(ARTIFACTS)/src/vite/rollup-wasm-$$9.tgz"
 
 
 .PHONY: all

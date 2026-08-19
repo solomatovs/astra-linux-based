@@ -80,6 +80,34 @@ RUN set -eu; \
     ln -sf "../lib/node_modules/pnpm/$pnpx_bin" "$BIN/pnpx"; \
     rm -rf /tmp/*
 
+# vite ставится в тот же DESTDIR из npm-кэша, свендоренного на make sources.
+# каталог vite/ есть всегда (make sources кладет туда .keep), но пуст для версий
+# node, где vite не ставится: VITE_VERSION=- (см. DEPS_<версия> в Makefile)
+ARG VITE_VERSION=-
+COPY artifacts/src/vite/ /tmp/vite/
+RUN set -eu; \
+    if [ "${VITE_VERSION}" != "-" ]; then \
+        export PATH="${NODE_PATH}/usr/local/bin:${PATH}"; \
+        NM="${NODE_PATH}/usr/local/lib/node_modules"; \
+        mkdir -p /tmp/vite-cache; \
+        tar -xzf /tmp/vite/vite-cache-${VITE_VERSION}.tar.gz -C /tmp/vite-cache; \
+        npm install -g vite@${VITE_VERSION} --prefix ${NODE_PATH}/usr/local \
+            --offline --cache /tmp/vite-cache/cache --no-audit --no-fund; \
+        # нативному биндингу rollup 4 нужен glibc >= 2.29, а рантайм — 2.28, JS-фолбэка
+        # у rollup нет. Штатный для vite обходной путь — заменить rollup его же
+        # wasm-сборкой @rollup/wasm-node (тот же API и версия). Для vite 4 (rollup 3,
+        # чистый JS) файла нет и подмена не нужна
+        wasm="/tmp/vite/rollup-wasm-${VITE_VERSION}.tgz"; \
+        if [ -f "$wasm" ]; then \
+            rm -rf "$NM/vite/node_modules/rollup" "$NM/vite/node_modules/@rollup/rollup-linux-x64-gnu"; \
+            mkdir -p /tmp/rollup-wasm; \
+            tar -xzf "$wasm" -C /tmp/rollup-wasm; \
+            mv /tmp/rollup-wasm/package "$NM/vite/node_modules/rollup"; \
+        fi; \
+        vite --version; \
+    fi; \
+    rm -rf /tmp/*
+
 
 # dist: только скомпилированный /opt/nodejs без тулчейна — компактный «дистрибутив»
 FROM base AS dist

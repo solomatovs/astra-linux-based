@@ -13,7 +13,12 @@ ARG PG_PREFIX=/usr/local/pgsql
 ARG PG_PATH=/opt/pgsql
 
 # gcc-тулчейн из slim gcc:*-dist лежит в /opt/gcc — переносим в /usr/local
-RUN cp -a /opt/gcc/usr/local/. /usr/local/                          \
+# рантайм тулчейна (libstdc++/libgcc_s/libatomic) лежит отдельно, в /usr/lib/x86_64-linux-gnu,
+# а в /usr/local/lib64 на него симлинки — без переноса линкер не найдет -lgcc_s.
+# дистрибутивные копии убираем до установки: версия должна остаться одна
+RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc_s.so.1 \
+    && cp -a /opt/gcc/usr/local/. /usr/local/                          \
+    && cp -a /opt/gcc/usr/lib/x86_64-linux-gnu/. /usr/lib/x86_64-linux-gnu/ \
     && ln -sf gcc /usr/local/bin/cc                                 \
     && ln -sf g++ /usr/local/bin/c++                                \
     && printf '%s\n' /usr/local/lib64 /usr/local/lib > /etc/ld.so.conf.d/gcc-local.conf \
