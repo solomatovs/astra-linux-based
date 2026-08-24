@@ -20,22 +20,33 @@ BASE_URL			?= https://github.com/fluent/fluent-bit/archive/refs/tags
 OPENSSL_URL			?= https://github.com/openssl/openssl/releases/download
 # libyaml (releases/download/<версия>/yaml-<версия>.tar.gz)
 LIBYAML_URL			?= https://github.com/yaml/libyaml/releases/download
+# postgres (v<версия>/postgresql-<версия>.tar.gz) — из него берётся только libpq
+# для выходного плагина out_pgsql
+POSTGRES_URL		?= https://ftp.postgresql.org/pub/source
 # docker build --no-cache
 NO_CACHE			?= 0
-# apt-deps (build): flex/bison/m4 нужны генератору парсеров, pkg-config — cmake-поиску
-APT_DEPS			?= flex bison m4 pkg-config
+# apt-deps (build): flex/bison/m4 нужны генератору парсеров (и configure у postgres),
+# pkg-config — cmake-поиску, libsystemd-dev — заголовки sd-journal для in_systemd,
+# libkrb5-dev — заголовки GSSAPI для libpq. Только заголовки: сами .so есть в
+# рантайм-образе, libc6-dev ни один пакет не тянет (проверено apt-get install -s)
+APT_DEPS			?= flex bison m4 pkg-config libsystemd-dev libkrb5-dev
 
 GLIBC_IMAGE			?= dmp/glibc:2.28
 GCC_IMAGE			?= dmp/gcc:14.2.0-dist
 CMAKE_IMAGE			?= dmp/cmake:3.27.9-dist
 
 # зависимости для сборки разных версии
-# openssl/libyaml собираются из исходников и линкуются СТАТИЧЕСКИ
-# версия      runtime_image    build_image     cmake_image      openssl   libyaml
-DEPS_3.2.10	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5
-DEPS_4.0.14	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5
-DEPS_4.2.6	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5
-DEPS_5.0.9	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5
+# openssl/libyaml/libpq собираются из исходников и линкуются СТАТИЧЕСКИ
+# postgres: версия берётся ради клиентской библиотеки libpq (out_pgsql). Ставьте не
+# ниже самого нового сервера, к которому будете подключаться: libpq 9.6 не умеет
+# scram-sha-256, а это дефолт аутентификации с postgres 10
+# avro: кодек берётся из вендоренных lib/avro и lib/jansson. в 4.0.14 включить
+# нельзя — jansson и nghttp2 объявляют одну и ту же цель cmake "check"
+# версия      runtime_image    build_image     cmake_image      openssl   libyaml  postgres  avro
+DEPS_3.2.10	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On
+DEPS_4.0.14	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      Off
+DEPS_4.2.6	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On
+DEPS_5.0.9	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On
 
 # базовое название для образа
 IMAGE			:= dmp/fluent-bit
@@ -77,15 +88,28 @@ clean-all:		$(addprefix clean-,$(VERSION_CHAIN))
 help:
 	@echo "make:"
 	@echo "  make all        собрать всё"
-	@echo "  make sources    скачать исходники (fluent-bit/openssl/libyaml) для $(VERSION)"
+	@echo "  make sources    скачать исходники (fluent-bit/openssl/libyaml/postgres) для $(VERSION)"
 	@echo "  make dist       собрать -dist образ $(VERSION) (звенья цепочки — если нужны)"
 	@echo "  make build      собрать образ $(IMAGE)"
 	@echo "  make test       проверить образ: fluent-bit --version, список плагинов, smoke-пайплайн"
 	@echo ""
 	@echo "  Цепочка: $(VERSION_CHAIN)"
 	@echo "  Каждая версия собирается тулчейном dmp/gcc, cmake берётся из dmp/cmake, рантайм — чистый dmp/glibc."
-	@echo "  Максимум модулей: FLB_ALL + FLB_JEMALLOC (56 in / 49 out / 24 filter / 9 processor)."
-	@echo "  OpenSSL/libyaml собираются из исходников и линкуются СТАТИЧЕСКИ — runtime-.so не требуются."
+	@echo "  Максимум модулей: FLB_ALL + всё, что апстрим держит выключенным по умолчанию —"
+	@echo "  out_pgsql (свой статический libpq), in_systemd (journald), avro-кодек,"
+	@echo "  in_unix_socket, in_event_test, out_retry."
+	@echo "  Свои плагины из plugins/ собираются рядом как .so и перечисляются в"
+	@echo "  /usr/local/etc/fluent-bit/plugins.conf (сейчас: in_clickhouse — SQL в ClickHouse по HTTP)."
+	@echo "  Не собираются (нужен чужой тулчейн, недоступный на этой базе):"
+	@echo "    in_ebpf        — clang с целью bpf, bpftool и libbpf/libelf (в astra 2.12 их нет)"
+	@echo "    filter_throttle_size — не собирается с текущим API flb_hash_table (баг апстрима)"
+	@echo "    filter_tensorflow — libtensorflow"
+	@echo "    FLB_ARROW      — Apache Arrow GLib"
+	@echo "    FLB_WAMRC      — AOT-компилятор WASM, требует сборки LLVM внутри WAMR"
+	@echo "    FLB_ZIG        — компилятор zig ровно версии 0.14.0"
+	@echo "    winlog/winevtlog/winstat — только Windows"
+	@echo "  OpenSSL/libyaml/libpq собираются из исходников и линкуются СТАТИЧЕСКИ."
+	@echo "  Единственная внешняя .so — libsystemd.so.0 из базового образа (ради in_systemd)."
 	@echo "  libstdc++/libgcc линкуются статически — рантайму нужен только glibc."
 	@echo "  Каждый образ тегируется полной и короткой версией (напр. 5.0.9 и 5.0)."
 	@echo "  Версии зависимостей — в DEPS_<версия>."
@@ -109,6 +133,7 @@ debug:
 	$(info BASE_URL       = $(BASE_URL))
 	$(info OPENSSL_URL    = $(OPENSSL_URL))
 	$(info LIBYAML_URL    = $(LIBYAML_URL))
+	$(info POSTGRES_URL   = $(POSTGRES_URL))
 	$(info NO_CACHE       = $(NO_CACHE))
 	$(info NO_CACHE_TEXT  = $(NO_CACHE_TEXT))
 	$(info APT_DEPS       = $(APT_DEPS))
@@ -146,12 +171,14 @@ sources-%:
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	openssl=$$4; libyaml=$$5
+	openssl=$$4; libyaml=$$5; postgres=$$6
 	mkdir -p $(ARTIFACTS)/src
 	# полные url собираются из базового url и версии (версии — в DEPS_<версия>)
 	[ -f "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
 	[ -f "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
 	[ -f "$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" "$(LIBYAML_URL)/$$libyaml/yaml-$$libyaml.tar.gz"
+	# .tar.gz, а не .tar.bz2 как у соседнего проекта postgres: bzip2 в сборочном образе нет
+	[ -f "$(ARTIFACTS)/src/postgresql-$$postgres.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/postgresql-$$postgres.tar.gz" "$(POSTGRES_URL)/v$$postgres/postgresql-$$postgres.tar.gz"
 
 
 # docker build --target dist - дистрибутив со скомпилированными исходниками (без установки в систему)
@@ -163,7 +190,7 @@ dist-%: $$(call need_dist,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5
+	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5; postgres=$$6; avro=$$7
 	short=$${current%.*}
 	[ -z "$(call built,$(IMAGE):$*-dist)" ] || { echo "  = $(IMAGE):$*-dist уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist \
@@ -173,6 +200,8 @@ dist-%: $$(call need_dist,$$*)
 		--build-arg FLB_VERSION=$$current 			\
 		--build-arg OPENSSL_VERSION=$$openssl 		\
 		--build-arg LIBYAML_VERSION=$$libyaml 		\
+		--build-arg POSTGRES_VERSION=$$postgres 	\
+		--build-arg AVRO_ENCODER=$$avro 			\
 		--build-arg APT_DEPS="$(APT_DEPS)" 			\
 		--tag $(IMAGE):$$current-dist 				\
 		--tag $(IMAGE):$$short-dist 				\
@@ -188,7 +217,7 @@ build-%: $$(call need_build,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5
+	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5; postgres=$$6; avro=$$7
 	short=$${current%.*}
 	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) 	\
@@ -199,6 +228,8 @@ build-%: $$(call need_build,$$*)
 		--build-arg FLB_VERSION=$$current 			\
 		--build-arg OPENSSL_VERSION=$$openssl 		\
 		--build-arg LIBYAML_VERSION=$$libyaml 		\
+		--build-arg POSTGRES_VERSION=$$postgres 	\
+		--build-arg AVRO_ENCODER=$$avro 			\
 		--build-arg APT_DEPS="$(APT_DEPS)" 			\
 		--tag $(IMAGE):$$current 					\
 		--tag $(IMAGE):$$short 						\
@@ -230,10 +261,11 @@ clean-%:
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	openssl=$$4; libyaml=$$5
+	openssl=$$4; libyaml=$$5; postgres=$$6
 	rm -f "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" \
 		"$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" \
-		"$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz"
+		"$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" \
+		"$(ARTIFACTS)/src/postgresql-$$postgres.tar.gz"
 
 
 .PHONY: all

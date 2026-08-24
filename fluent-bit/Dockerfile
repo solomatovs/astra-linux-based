@@ -13,6 +13,9 @@ FROM ${BUILD_IMAGE} AS dist
 ARG FLB_VERSION
 ARG OPENSSL_VERSION
 ARG LIBYAML_VERSION
+ARG POSTGRES_VERSION
+# On/Off: в 4.0.14 avro ломает конфигурацию cmake (см. DEPS в Makefile)
+ARG AVRO_ENCODER=On
 ARG APT_DEPS
 ARG FLB_PATH=/opt/fluent-bit
 ARG DEPS_PREFIX=/opt/deps
@@ -67,7 +70,37 @@ RUN set -eux;                                                             \
     make install;                                                         \
     cd /; rm -rf /tmp/yaml-${LIBYAML_VERSION}
 
-# fluent-bit: FLB_ALL — максимум плагинов, openssl/libyaml/libstdc++ линкуются статически
+# libpq (статически) — для out_pgsql и in_pgsql.
+# Собирается только цель libpq: полный make -C src/port тянет серверные объекты
+# и падает на генерируемых заголовках бэкенда.
+# libpq.a сливается с libpgport/libpgcommon в один архив: порядком -l не управляем.
+# --with-gssapi — pg_hba требует Kerberos.
+RUN set -eux;                                                             \
+    cd /tmp;                                                              \
+    tar -xf src/postgresql-${POSTGRES_VERSION}.tar.gz;                    \
+    cd postgresql-${POSTGRES_VERSION};                                    \
+    ./configure --prefix=${DEPS_PREFIX}                                   \
+        --without-readline --without-zlib --without-icu                   \
+        --without-ldap --without-libxml                                   \
+        --with-openssl --with-gssapi                                      \
+        CPPFLAGS="-I${DEPS_PREFIX}/include"                               \
+        LDFLAGS="-L${DEPS_PREFIX}/lib -L${DEPS_PREFIX}/lib64";            \
+    make -C src/interfaces/libpq -j"$(nproc)";                            \
+    make -C src/interfaces/libpq install;                                 \
+    make -C src/include install;                                          \
+    cd ${DEPS_PREFIX}/lib;                                                \
+    rm -f libpq.so*;                                                      \
+    printf '%s\n'                                                         \
+        'create libpq_all.a'                                              \
+        'addlib libpq.a'                                                  \
+        "addlib /tmp/postgresql-${POSTGRES_VERSION}/src/common/libpgcommon_shlib.a" \
+        "addlib /tmp/postgresql-${POSTGRES_VERSION}/src/port/libpgport_shlib.a"     \
+        'save' 'end' | ar -M;                                             \
+    mv libpq_all.a libpq.a;                                               \
+    ranlib libpq.a;                                                       \
+    cd /; rm -rf /tmp/postgresql-${POSTGRES_VERSION}
+
+# fluent-bit: FLB_ALL — максимум плагинов, openssl/libyaml/libpq/libstdc++ линкуются статически
 RUN set -eux;                                                           \
     cd /tmp;                                                            \
     tar -xf src/fluent-bit-${FLB_VERSION}.tar.gz;                       \
@@ -93,6 +126,18 @@ RUN set -eux;                                                           \
         -DFLB_EXAMPLES=Off                                              \
         -DFLB_TESTS_INTERNAL=Off                                        \
         -DFLB_TESTS_RUNTIME=Off                                         \
+        -DFLB_OUT_PGSQL=On                                              \
+        -DPostgreSQL_ROOT=${DEPS_PREFIX}                                \
+        -DPostgreSQL_INCLUDE_DIR=${DEPS_PREFIX}/include                 \
+        -DPostgreSQL_TYPE_INCLUDE_DIR=${DEPS_PREFIX}/include            \
+        -DPostgreSQL_LIBRARY=${DEPS_PREFIX}/lib/libpq.a                 \
+        -DCMAKE_C_STANDARD_LIBRARIES="-lgssapi_krb5"                    \
+        -DCMAKE_CXX_STANDARD_LIBRARIES="-lgssapi_krb5"                  \
+        -DFLB_IN_SYSTEMD=On                                             \
+        -DFLB_IN_UNIX_SOCKET=On                                         \
+        -DFLB_IN_EVENT_TEST=On                                          \
+        -DFLB_OUT_RETRY=On                                              \
+        -DFLB_AVRO_ENCODER=${AVRO_ENCODER}                              \
         -DOPENSSL_ROOT_DIR=${DEPS_PREFIX}                               \
         -DOPENSSL_USE_STATIC_LIBS=On                                    \
         -DFLB_LIBYAML_DIR=${DEPS_PREFIX}                                \
@@ -100,7 +145,33 @@ RUN set -eux;                                                           \
     cmake --build build -j"$(nproc)";                                   \
     DESTDIR=${FLB_PATH} cmake --install build;                          \
     strip ${FLB_PATH}/usr/local/bin/fluent-bit || true;                 \
-    du -h --max-depth=2 ${FLB_PATH};                                    \
+    du -h --max-depth=2 ${FLB_PATH}
+COPY plugins/ /tmp/plugins/
+
+# Свои плагины из plugins/ — только как .so: встроенные апстрим собирает
+# статически. Флаги берутся у cmake из flags.make родного плагина: расхождение
+# флагов даёт не ошибку, а порчу памяти (загрузчик делает memcpy структуры).
+# Собранное перечисляется в штатном plugins.conf.
+RUN set -eux;                                                           \
+    cd /tmp;                                                            \
+    flags="build/plugins/in_exec/CMakeFiles/flb-plugin-in_exec.dir/flags.make"; \
+    defs=$(sed -n 's/^C_DEFINES = //p' $flags);                         \
+    incs=$(sed -n 's/^C_INCLUDES = //p' $flags);                        \
+    mkdir -p ${FLB_PATH}/usr/local/lib/fluent-bit/plugins;              \
+    for dir in plugins/*/; do                                           \
+        name=$(basename $dir);                                          \
+        /usr/local/bin/gcc -fPIC -shared -O2                            \
+            -o ${FLB_PATH}/usr/local/lib/fluent-bit/plugins/flb-$name.so \
+            $dir/*.c $defs $incs;                                       \
+        echo "плагин собран: flb-$name.so";                             \
+    done;                                                               \
+    {                                                                   \
+        echo '[PLUGINS]';                                               \
+        for so in ${FLB_PATH}/usr/local/lib/fluent-bit/plugins/*.so; do  \
+            echo "    Path /usr/local/lib/fluent-bit/plugins/$(basename $so)"; \
+        done;                                                           \
+    } > ${FLB_PATH}/usr/local/etc/fluent-bit/plugins.conf;              \
+    cat ${FLB_PATH}/usr/local/etc/fluent-bit/plugins.conf;              \
     cd /; rm -rf /tmp/*
 
 
