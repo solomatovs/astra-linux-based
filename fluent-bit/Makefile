@@ -23,12 +23,17 @@ LIBYAML_URL			?= https://github.com/yaml/libyaml/releases/download
 # postgres (v<версия>/postgresql-<версия>.tar.gz) — из него берётся только libpq
 # для выходного плагина out_pgsql
 POSTGRES_URL		?= https://ftp.postgresql.org/pub/source
+# ccronexpr — разбор cron-выражений для параметра Schedule своих плагинов.
+# Не архив, а два файла: библиотека из одного .c и одного .h
+CCRONEXPR_URL		?= https://raw.githubusercontent.com/staticlibs/ccronexpr
 # docker build --no-cache
 NO_CACHE			?= 0
 # apt-deps (build): flex/bison/m4 нужны генератору парсеров (и configure у postgres),
 # pkg-config — cmake-поиску, libsystemd-dev — заголовки sd-journal для in_systemd,
 # libkrb5-dev — заголовки GSSAPI для libpq. Только заголовки: сами .so есть в
-# рантайм-образе, libc6-dev ни один пакет не тянет (проверено apt-get install -s)
+# рантайм-образе, libc6-dev ни один пакет не тянет (проверено apt-get install -s).
+# Ставятся через apt: на машине сборки подложен sources.list с прокси nexus.
+# Остальное (тарболы, ccronexpr) прокси не имеет — его качает `make sources`
 APT_DEPS			?= flex bison m4 pkg-config libsystemd-dev libkrb5-dev
 
 GLIBC_IMAGE			?= dmp/glibc:2.28
@@ -42,11 +47,12 @@ CMAKE_IMAGE			?= dmp/cmake:3.27.9-dist
 # scram-sha-256, а это дефолт аутентификации с postgres 10
 # avro: кодек берётся из вендоренных lib/avro и lib/jansson. в 4.0.14 включить
 # нельзя — jansson и nghttp2 объявляют одну и ту же цель cmake "check"
-# версия      runtime_image    build_image     cmake_image      openssl   libyaml  postgres  avro
-DEPS_3.2.10	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On
-DEPS_4.0.14	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      Off
-DEPS_4.2.6	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On
-DEPS_5.0.9	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On
+# ccronexpr: тег репозитория, файлы качаются по нему поштучно
+# версия      runtime_image    build_image     cmake_image      openssl   libyaml  postgres  avro  ccronexpr
+DEPS_3.2.10	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On    v20190415
+DEPS_4.0.14	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      Off   v20190415
+DEPS_4.2.6	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On    v20190415
+DEPS_5.0.9	:= $(GLIBC_IMAGE)   $(GCC_IMAGE)    $(CMAKE_IMAGE)   3.0.16    0.2.5    18.4      On    v20190415
 
 # базовое название для образа
 IMAGE			:= dmp/fluent-bit
@@ -88,7 +94,7 @@ clean-all:		$(addprefix clean-,$(VERSION_CHAIN))
 help:
 	@echo "make:"
 	@echo "  make all        собрать всё"
-	@echo "  make sources    скачать исходники (fluent-bit/openssl/libyaml/postgres) для $(VERSION)"
+	@echo "  make sources    скачать исходники (fluent-bit/openssl/libyaml/postgres/ccronexpr) для $(VERSION)"
 	@echo "  make dist       собрать -dist образ $(VERSION) (звенья цепочки — если нужны)"
 	@echo "  make build      собрать образ $(IMAGE)"
 	@echo "  make test       проверить образ: fluent-bit --version, список плагинов, smoke-пайплайн"
@@ -177,14 +183,18 @@ sources-%:
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	openssl=$$4; libyaml=$$5; postgres=$$6
-	mkdir -p $(ARTIFACTS)/src
+	openssl=$$4; libyaml=$$5; postgres=$$6; ccronexpr=$$8
+	mkdir -p $(ARTIFACTS)/src $(ARTIFACTS)/src/ccronexpr-$$ccronexpr
 	# полные url собираются из базового url и версии (версии — в DEPS_<версия>)
 	[ -f "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" "$(BASE_URL)/v$$current.tar.gz"
 	[ -f "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" "$(OPENSSL_URL)/openssl-$$openssl/openssl-$$openssl.tar.gz"
 	[ -f "$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" "$(LIBYAML_URL)/$$libyaml/yaml-$$libyaml.tar.gz"
 	# .tar.gz, а не .tar.bz2 как у соседнего проекта postgres: bzip2 в сборочном образе нет
 	[ -f "$(ARTIFACTS)/src/postgresql-$$postgres.tar.gz" ] || curl -v -L -o "$(ARTIFACTS)/src/postgresql-$$postgres.tar.gz" "$(POSTGRES_URL)/v$$postgres/postgresql-$$postgres.tar.gz"
+	# ccronexpr отдаётся не архивом, поэтому берём оба файла по отдельности
+	for f in ccronexpr.c ccronexpr.h; do
+		[ -f "$(ARTIFACTS)/src/ccronexpr-$$ccronexpr/$$f" ] || curl -v -L -o "$(ARTIFACTS)/src/ccronexpr-$$ccronexpr/$$f" "$(CCRONEXPR_URL)/$$ccronexpr/$$f"
+	done
 
 
 # docker build --target dist - дистрибутив со скомпилированными исходниками (без установки в систему)
@@ -196,7 +206,7 @@ dist-%: $$(call need_dist,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5; postgres=$$6; avro=$$7
+	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5; postgres=$$6; avro=$$7; ccronexpr=$$8
 	short=$${current%.*}
 	[ -z "$(call built,$(IMAGE):$*-dist)" ] || { echo "  = $(IMAGE):$*-dist уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) --target dist \
@@ -208,6 +218,7 @@ dist-%: $$(call need_dist,$$*)
 		--build-arg LIBYAML_VERSION=$$libyaml 		\
 		--build-arg POSTGRES_VERSION=$$postgres 	\
 		--build-arg AVRO_ENCODER=$$avro 			\
+		--build-arg CCRONEXPR_VERSION=$$ccronexpr 	\
 		--build-arg APT_DEPS="$(APT_DEPS)" 			\
 		--tag $(IMAGE):$$current-dist 				\
 		--tag $(IMAGE):$$short-dist 				\
@@ -223,7 +234,7 @@ build-%: $$(call need_build,$$*)
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5; postgres=$$6; avro=$$7
+	runtime=$$1; build=$$2; cmake=$$3; openssl=$$4; libyaml=$$5; postgres=$$6; avro=$$7; ccronexpr=$$8
 	short=$${current%.*}
 	[ -z "$(call built,$(IMAGE):$*)" ] || { echo "  = $(IMAGE):$* уже собран (FORCE=1 — пересобрать)"; exit 0; }
 	docker build -f Dockerfile $(NO_CACHE_TEXT) 	\
@@ -236,6 +247,7 @@ build-%: $$(call need_build,$$*)
 		--build-arg LIBYAML_VERSION=$$libyaml 		\
 		--build-arg POSTGRES_VERSION=$$postgres 	\
 		--build-arg AVRO_ENCODER=$$avro 			\
+		--build-arg CCRONEXPR_VERSION=$$ccronexpr 	\
 		--build-arg APT_DEPS="$(APT_DEPS)" 			\
 		--tag $(IMAGE):$$current 					\
 		--tag $(IMAGE):$$short 						\
@@ -281,7 +293,8 @@ clean-%:
 	@current=$(*)
 	set -e
 	set -- $(DEPS_$*)
-	openssl=$$4; libyaml=$$5; postgres=$$6
+	openssl=$$4; libyaml=$$5; postgres=$$6; ccronexpr=$$8
+	rm -rf "$(ARTIFACTS)/src/ccronexpr-$$ccronexpr"
 	rm -f "$(ARTIFACTS)/src/fluent-bit-$$current.tar.gz" \
 		"$(ARTIFACTS)/src/openssl-$$openssl.tar.gz" \
 		"$(ARTIFACTS)/src/yaml-$$libyaml.tar.gz" \

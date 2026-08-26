@@ -77,6 +77,8 @@ struct flb_in_postgres {
     int cursor_type;        /* DBM_CURSOR_* */
     struct dbm_names labels;
     struct dbm_names values;
+    flb_sds_t schedule_conf;
+    struct dbm_schedule schedule;
     int coll_fd;
     struct flb_log_event_encoder log_encoder;
 };
@@ -678,6 +680,11 @@ static int cb_collect(struct flb_input_instance *ins,
     (void) ins;
     (void) config;
 
+    /* расписание: тик пришёл, но момент ещё не наступил */
+    if (!dbm_schedule_due(&ctx->schedule, time(NULL))) {
+        return 0;
+    }
+
     /* набор один на цикл: у метрики фиксированный набор меток, а серверы
      * различаются значением instance — им нужен общий gauge, а не свой */
     if (ctx->mode != DBM_MODE_LOGS) {
@@ -779,6 +786,11 @@ static int cb_init(struct flb_input_instance *ins,
         return -1;
     }
 
+    if (dbm_schedule_init(&ctx->schedule, ctx->schedule_conf, ins,
+                          ctx->interval_sec) != 0) {
+        return -1;
+    }
+
     ret = flb_input_set_collector_time(ins, cb_collect,
                                        ctx->interval_sec, ctx->interval_nsec,
                                        config);
@@ -798,6 +810,7 @@ static int cb_init(struct flb_input_instance *ins,
                      ctx->labels.count > 0 ? ", " : "",
                      ctx->labels.count > 0 ? ctx->label_fields : "");
     }
+    dbm_schedule_log(&ctx->schedule, ins, ctx->schedule_conf);
     return 0;
 }
 
@@ -960,6 +973,12 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_INT, "retry_pause_sec", "30",
      0, FLB_TRUE, offsetof(struct flb_in_postgres, retry_pause_sec),
      "Пауза перед следующей попыткой после неудачного подключения, секунды"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "schedule", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, schedule_conf),
+     "cron-выражение: прогон только в совпавшие моменты. 5 полей как в cron "
+     "или 6 с секундами; часовой пояс — из TZ контейнера"
     },
     {
      FLB_CONFIG_MAP_INT, "interval_sec", DEFAULT_INTERVAL_SEC,

@@ -23,6 +23,9 @@
 
 #include <libpq-fe.h>
 
+/* ради расписания: dbm_schedule_* поверх ccronexpr */
+#include "dbmetrics.h"
+
 #define DEFAULT_INTERVAL_SEC  "60"
 #define DEFAULT_PG_PORT       "5432"
 #define DEFAULT_CH_PORT       8123
@@ -71,6 +74,8 @@ struct flb_in_pg2ch {
     int ch_port;
     struct flb_upstream *u;
     flb_sds_t insert_uri;       /* URI вставки, собранный один раз */
+    flb_sds_t schedule_conf;
+    struct dbm_schedule schedule;
     int coll_fd;
     struct flb_log_event_encoder log_encoder;
 };
@@ -475,6 +480,11 @@ static int cb_collect(struct flb_input_instance *ins,
     (void) ins;
     (void) config;
 
+    /* расписание: тик пришёл, но момент ещё не наступил */
+    if (!dbm_schedule_due(&ctx->schedule, time(NULL))) {
+        return 0;
+    }
+
     if (pg_connect(ctx) != 0) {
         return 0;
     }
@@ -703,6 +713,11 @@ static int cb_init(struct flb_input_instance *ins,
         return -1;
     }
 
+    if (dbm_schedule_init(&ctx->schedule, ctx->schedule_conf, ins,
+                          ctx->interval_sec) != 0) {
+        return -1;
+    }
+
     ret = flb_input_set_collector_time(ins, cb_collect,
                                        ctx->interval_sec, ctx->interval_nsec,
                                        config);
@@ -715,6 +730,7 @@ static int cb_init(struct flb_input_instance *ins,
     flb_plg_info(ins, "pg %s:%s → ch %s:%i %s, каждые %i с, батч %zu байт",
                  ctx->pg_host, ctx->pg_port, ctx->ch_host, ctx->ch_port,
                  ctx->ch_table, ctx->interval_sec, ctx->batch_bytes);
+    dbm_schedule_log(&ctx->schedule, ins, ctx->schedule_conf);
     return 0;
 }
 
@@ -868,6 +884,12 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_INT, "retry_pause_sec", "30",
      0, FLB_TRUE, offsetof(struct flb_in_pg2ch, retry_pause_sec),
      "Пауза перед следующей попыткой после неудачного подключения"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "schedule", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_pg2ch, schedule_conf),
+     "cron-выражение: прогон только в совпавшие моменты. 5 полей как в cron "
+     "или 6 с секундами; часовой пояс — из TZ контейнера"
     },
     {
      FLB_CONFIG_MAP_INT, "interval_sec", DEFAULT_INTERVAL_SEC,

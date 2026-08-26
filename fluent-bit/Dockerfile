@@ -16,6 +16,7 @@ ARG LIBYAML_VERSION
 ARG POSTGRES_VERSION
 # On/Off: в 4.0.14 avro ломает конфигурацию cmake (см. DEPS в Makefile)
 ARG AVRO_ENCODER=On
+ARG CCRONEXPR_VERSION
 ARG APT_DEPS
 ARG FLB_PATH=/opt/fluent-bit
 ARG DEPS_PREFIX=/opt/deps
@@ -38,6 +39,7 @@ RUN rm -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /lib/x86_64-linux-gnu/libgcc
     && ldconfig
 
 # build-toolchain (flex/bison/m4 — парсеры fluent-bit, pkg-config — поиск зависимостей)
+# apt идёт через прокси nexus (sources.list подкладывается на машине сборки)
 RUN if [ -n "${APT_DEPS}" ]; then                                         \
         apt-get update                                                    \
         && apt-get install -y --no-install-recommends ${APT_DEPS}         \
@@ -152,19 +154,24 @@ COPY plugins/ /tmp/plugins/
 # статически. Флаги берутся у cmake из flags.make родного плагина: расхождение
 # флагов даёт не ошибку, а порчу памяти (загрузчик делает memcpy структуры).
 # Каталог на плагин; plugins/include — общие заголовки, .so из него не делается.
+# Рядом компилируется ccronexpr (разбор cron-выражений для Schedule): это не
+# библиотека в системе, а один .c, поэтому он просто добавляется в каждый .so.
 # Собранное перечисляется в штатном plugins.conf.
 RUN set -eux;                                                           \
     cd /tmp;                                                            \
     flags="build/plugins/in_exec/CMakeFiles/flb-plugin-in_exec.dir/flags.make"; \
     defs=$(sed -n 's/^C_DEFINES = //p' $flags);                         \
     incs=$(sed -n 's/^C_INCLUDES = //p' $flags);                        \
+    cron=src/ccronexpr-${CCRONEXPR_VERSION};                            \
+    ls $cron/ccronexpr.c >/dev/null;                                    \
     mkdir -p ${FLB_PATH}/usr/local/lib/fluent-bit/plugins;              \
     for dir in plugins/*/; do                                           \
         name=$(basename $dir);                                          \
         ls $dir*.c >/dev/null 2>&1 || continue;                         \
         /usr/local/bin/gcc -fPIC -shared -O2 -I plugins/include         \
+            -I $cron -DCRON_USE_LOCAL_TIME                              \
             -o ${FLB_PATH}/usr/local/lib/fluent-bit/plugins/flb-$name.so \
-            $dir/*.c $defs $incs;                                       \
+            $dir/*.c $cron/ccronexpr.c $defs $incs;                     \
         echo "плагин собран: flb-$name.so";                             \
     done;                                                               \
     {                                                                   \

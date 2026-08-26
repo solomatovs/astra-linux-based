@@ -20,6 +20,8 @@
 #include <cmetrics/cmetrics.h>
 #include <cmetrics/cmt_gauge.h>
 
+#include "ccronexpr.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -77,6 +79,115 @@ static int dbm_cursor_type_parse(const char *value)
         return DBM_CURSOR_RAW;
     }
     return -1;
+}
+
+/* ------------------------------------------------------------- расписание */
+
+/* Разбор cron-выражений — библиотека ccronexpr (Apache 2.0), качается в
+ * ci-artifacts по тегу из DEPS и компилируется рядом с плагином. Собрана с
+ * CRON_USE_LOCAL_TIME, поэтому расписание считается в часовом поясе
+ * контейнера: задаётся переменной TZ, по умолчанию UTC.
+ *
+ * Как это работает: коллектор продолжает тикать по Interval_Sec, а расписание
+ * решает, делать ли прогон на этом тике. Тик должен быть не реже самой частой
+ * минуты расписания — иначе момент можно проспать; плагин это проверяет и
+ * предупреждает. */
+
+struct dbm_schedule {
+    int enabled;
+    cron_expr expr;
+    time_t next;                /* когда ближайший разрешённый прогон */
+};
+
+/* Библиотека требует ровно 6 полей (первое — секунды). Привычные пять
+ * дополняем нулевой секундой сами: пользователь пишет "0 2 * * *", как в cron. */
+static int dbm_schedule_init(struct dbm_schedule *sc, const char *expr,
+                             struct flb_input_instance *ins, int interval_sec)
+{
+    const char *err = NULL;
+    char buf[256];
+    const char *p;
+    int fields = 0;
+    int in_field = 0;
+
+    memset(sc, 0, sizeof(*sc));
+    if (!expr || *expr == '\0') {
+        return 0;
+    }
+
+    for (p = expr; *p; p++) {
+        if (*p == ' ' || *p == '\t') {
+            in_field = 0;
+        }
+        else if (!in_field) {
+            in_field = 1;
+            fields++;
+        }
+    }
+
+    if (fields == 5) {
+        if (snprintf(buf, sizeof(buf), "0 %s", expr) >= (int) sizeof(buf)) {
+            flb_plg_error(ins, "schedule слишком длинное");
+            return -1;
+        }
+    }
+    else if (fields == 6) {
+        if (snprintf(buf, sizeof(buf), "%s", expr) >= (int) sizeof(buf)) {
+            flb_plg_error(ins, "schedule слишком длинное");
+            return -1;
+        }
+    }
+    else {
+        flb_plg_error(ins, "schedule: нужно 5 полей (как в cron) или 6 "
+                      "(с секундами), а их %i: %s", fields, expr);
+        return -1;
+    }
+
+    cron_parse_expr(buf, &sc->expr, &err);
+    if (err) {
+        flb_plg_error(ins, "schedule не разобрано (%s): %s", err, expr);
+        return -1;
+    }
+
+    /* тик реже минуты может перепрыгнуть разрешённый момент */
+    if (interval_sec > 60) {
+        flb_plg_warn(ins, "interval_sec %i больше минуты: моменты расписания "
+                     "можно проспать, поставьте 60 или меньше", interval_sec);
+    }
+
+    sc->enabled = 1;
+    sc->next = cron_next(&sc->expr, time(NULL));
+    return 0;
+}
+
+/* Пора ли работать. Вызывается на каждом тике коллектора. */
+static int dbm_schedule_due(struct dbm_schedule *sc, time_t now)
+{
+    if (!sc->enabled) {
+        return FLB_TRUE;
+    }
+    if (now < sc->next) {
+        return FLB_FALSE;
+    }
+    /* момент наступил: считаем следующий от текущего времени, а не от
+     * пропущенного — иначе после долгой паузы плагин отработал бы подряд
+     * столько раз, сколько моментов проспал */
+    sc->next = cron_next(&sc->expr, now);
+    return FLB_TRUE;
+}
+
+static void dbm_schedule_log(struct dbm_schedule *sc,
+                             struct flb_input_instance *ins, const char *expr)
+{
+    struct tm tm;
+    char when[64];
+
+    if (!sc->enabled) {
+        return;
+    }
+    localtime_r(&sc->next, &tm);
+    strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S %Z", &tm);
+    flb_plg_info(ins, "расписание «%s», ближайший прогон %s", expr, when);
 }
 
 /* --------------------------------------------------------------- имена полей */

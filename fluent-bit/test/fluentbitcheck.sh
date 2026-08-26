@@ -8,6 +8,13 @@ set -euo pipefail
 
 FLB=/usr/local/bin/fluent-bit
 
+# fluent-bit 4.0.14 иногда падает с SIGSEGV в flb_engine_shutdown() уже ПОСЛЕ
+# успешной проверки конфигурации — то есть на выходе из процесса (примерно один
+# запуск из десяти, воспроизводится и на голом `--dry-run -i dummy -o null`, без
+# наших плагинов). Поэтому выводы делаем по тексту ответа, а не по коду возврата:
+# иначе чужой крах на выходе валил бы весь тест случайным образом.
+dry() { "$@" 2>&1 || true; }
+
 echo "== 1. plugins =="
 # наличие плагина проверяем по dry-run: отсутствующий плагин даёт
 # "plugin name that doesn't exist", присутствующий (даже недонастроенный) — нет
@@ -17,7 +24,7 @@ has_plugin() {  # $1=роль (-i/-o/-F) $2=имя
         -o) args="-i dummy -o $2" ;;
         -F) args="-i dummy -F $2 -m * -o null" ;;
     esac
-    if "$FLB" --dry-run $args 2>&1 | grep -q "doesn't exist"; then
+    if dry "$FLB" --dry-run $args | grep -q "doesn't exist"; then
         echo "MISS $1 $2"
     else
         echo "OK  $1 $2"
@@ -49,9 +56,9 @@ check_so() {
     so=$1
     base=$(basename "$so" .so); base=${base#flb-}
     case "$base" in
-        in_*)     name=${base#in_};     out=$("$FLB" -e "$so" --dry-run -i "$name" -o null 2>&1) ;;
-        out_*)    name=${base#out_};    out=$("$FLB" -e "$so" --dry-run -i dummy -o "$name" 2>&1) ;;
-        filter_*) name=${base#filter_}; out=$("$FLB" -e "$so" --dry-run -i dummy -F "$name" -m '*' -o null 2>&1) ;;
+        in_*)     name=${base#in_};     out=$(dry "$FLB" -e "$so" --dry-run -i "$name" -o null 2>&1) ;;
+        out_*)    name=${base#out_};    out=$(dry "$FLB" -e "$so" --dry-run -i dummy -o "$name" 2>&1) ;;
+        filter_*) name=${base#filter_}; out=$(dry "$FLB" -e "$so" --dry-run -i dummy -F "$name" -m '*' -o null 2>&1) ;;
         *) echo "SKIP $so — роль не читается из имени"; return 0 ;;
     esac
     case "$out" in
@@ -75,9 +82,9 @@ echo "== 2.1 режим metrics у своих плагинов =="
 # неизвестный параметр fluent-bit отвергает на разборе, а не игнорирует молча,
 # поэтому успешный --dry-run с ними и означает, что metrics-режим в плагине есть
 metrics_opts() {  # $1=.so $2=имя входа
-    "$FLB" -e "$1" --dry-run -i "$2" -p targets=localhost -p 'query=SELECT 1' \
+    dry "$FLB" -e "$1" --dry-run -i "$2" -p targets=localhost -p 'query=SELECT 1' \
         -p mode=metrics -p metric_prefix=test -p label_fields=a -p value_fields=b \
-        -p time_field=t -o null 2>&1
+        -p time_field=t -o null
 }
 for pair in "in_postgres postgres" "in_clickhouse clickhouse"; do
     set -- $pair
@@ -95,7 +102,7 @@ done
 echo "== 2.1.1 параметры насоса pg2ch =="
 so="$PLUGIN_DIR/flb-in_pg2ch.so"
 if [ -e "$so" ]; then
-    out=$("$FLB" -e "$so" --dry-run -i pg2ch -p pg_target=pg -p ch_target=ch \
+    out=$(dry "$FLB" -e "$so" --dry-run -i pg2ch -p pg_target=pg -p ch_target=ch \
         -p ch_table=t -p 'query=SELECT 1' -p 'cursor_query=SELECT 1' \
         -p batch_bytes=1M -p ch_columns=a,b -o null 2>&1)
     if grep -q "successful" <<<"$out"; then
@@ -115,9 +122,9 @@ for pair in "out_clickhouse clickhouse" "out_postgres postgres"; do
     so="$PLUGIN_DIR/flb-$1.so"
     [ -e "$so" ] || { echo "SKIP $1 не собран"; continue; }
     # table-режим и query-режим должны приниматься оба
-    a=$("$FLB" -e "$so" --dry-run -i dummy -o "$2" -p host=localhost \
+    a=$(dry "$FLB" -e "$so" --dry-run -i dummy -o "$2" -p host=localhost \
         -p table=t -p time_key=ts -p time_format=iso8601 2>&1)
-    b=$("$FLB" -e "$so" --dry-run -i dummy -o "$2" -p host=localhost \
+    b=$(dry "$FLB" -e "$so" --dry-run -i dummy -o "$2" -p host=localhost \
         -p 'query=INSERT INTO t SELECT 1' 2>&1)
     if grep -q "successful" <<<"$a" && grep -q "successful" <<<"$b"; then
         echo "OK  $2: приняты и table, и query"
@@ -145,8 +152,8 @@ for pair in "in_clickhouse -i clickhouse" "out_clickhouse -o clickhouse"; do
         head="-i dummy -o $3 -p host=localhost -p table=t"
         tail_args=""
     fi
-    on=$("$FLB" -e "$so" --dry-run $head -p tls=on -p tls.verify=off $tail_args 2>&1)
-    off=$("$FLB" -e "$so" --dry-run $head $tail_args 2>&1)
+    on=$(dry "$FLB" -e "$so" --dry-run $head -p tls=on -p tls.verify=off $tail_args 2>&1)
+    off=$(dry "$FLB" -e "$so" --dry-run $head $tail_args 2>&1)
     if grep -q "successful" <<<"$on" && grep -q "successful" <<<"$off"; then
         echo "OK  $3 ($2): tls принимается, без него — обычный TCP"
     else
@@ -159,7 +166,7 @@ done
 echo "== 2.1.4 кольцевой буфер =="
 so="$PLUGIN_DIR/flb-out_ring.so"
 if [ -e "$so" ]; then
-    out=$("$FLB" -e "$so" --dry-run -i dummy -o ring -p host=127.0.0.1 \
+    out=$(dry "$FLB" -e "$so" --dry-run -i dummy -o ring -p host=127.0.0.1 \
         -p port=2022 -p uri=/logs -p clear_uri=/logs/clear -p stats_uri=/stats \
         -p ring_size=1M -p time_key=ts -p time_format=iso8601 2>&1)
     if grep -q "successful" <<<"$out"; then
@@ -172,6 +179,27 @@ if [ -e "$so" ]; then
 else
     echo "SKIP ring не собран"
 fi
+
+echo "== 2.1.5 расписание (cron) у входов =="
+# 5 полей и 6 полей должны приниматься оба; проверяем на всех трёх входах
+for pair in "in_postgres -i postgres" "in_clickhouse -i clickhouse" "in_pg2ch -i pg2ch"; do
+    set -- $pair
+    so="$PLUGIN_DIR/flb-$1.so"
+    [ -e "$so" ] || { echo "SKIP $1 не собран"; continue; }
+    case "$3" in
+        pg2ch) args="-p pg_target=pg -p ch_target=ch -p ch_table=t -p query=SELECT_1" ;;
+        *)     args="-p targets=localhost -p query=SELECT_1" ;;
+    esac
+    a=$(dry "$FLB" -e "$so" --dry-run -i "$3" $args -p 'schedule=0 2 * * *' -o null 2>&1)
+    b=$(dry "$FLB" -e "$so" --dry-run -i "$3" $args -p 'schedule=*/30 * * * * *' -o null 2>&1)
+    if grep -q "successful" <<<"$a" && grep -q "successful" <<<"$b"; then
+        echo "OK  $3: schedule принят и в 5, и в 6 полей"
+    else
+        echo "$a" | tail -2; echo "$b" | tail -2
+        echo "FAIL $3: schedule не принят" >&2
+        exit 1
+    fi
+done
 
 echo "== 2.2 библиотека запросов и примеры =="
 SHARE=/usr/local/share/fluent-bit
@@ -186,7 +214,7 @@ for d in queries/pg queries/ch examples; do
 done
 
 echo "== 3. build features (fluent-bit --version / build flags) =="
-"$FLB" --version
+dry "$FLB" --version
 # наличие TLS/HTTP-сервера подтверждаем запуском с http-сервером ниже
 
 echo "== 4. smoke pipeline (dummy -> stdout) =="
