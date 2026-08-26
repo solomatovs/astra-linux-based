@@ -71,6 +71,120 @@ if [ "$found" -eq 0 ]; then
     exit 1
 fi
 
+echo "== 2.1 режим metrics у своих плагинов =="
+# неизвестный параметр fluent-bit отвергает на разборе, а не игнорирует молча,
+# поэтому успешный --dry-run с ними и означает, что metrics-режим в плагине есть
+metrics_opts() {  # $1=.so $2=имя входа
+    "$FLB" -e "$1" --dry-run -i "$2" -p targets=localhost -p 'query=SELECT 1' \
+        -p mode=metrics -p metric_prefix=test -p label_fields=a -p value_fields=b \
+        -p time_field=t -o null 2>&1
+}
+for pair in "in_postgres postgres" "in_clickhouse clickhouse"; do
+    set -- $pair
+    so="$PLUGIN_DIR/flb-$1.so"
+    [ -e "$so" ] || { echo "SKIP $1 не собран"; continue; }
+    if metrics_opts "$so" "$2" | grep -q "successful"; then
+        echo "OK  $2: mode/metric_prefix/label_fields/value_fields/time_field приняты"
+    else
+        metrics_opts "$so" "$2" | tail -3
+        echo "FAIL $2: параметры metrics-режима не приняты" >&2
+        exit 1
+    fi
+done
+
+echo "== 2.1.1 параметры насоса pg2ch =="
+so="$PLUGIN_DIR/flb-in_pg2ch.so"
+if [ -e "$so" ]; then
+    out=$("$FLB" -e "$so" --dry-run -i pg2ch -p pg_target=pg -p ch_target=ch \
+        -p ch_table=t -p 'query=SELECT 1' -p 'cursor_query=SELECT 1' \
+        -p batch_bytes=1M -p ch_columns=a,b -o null 2>&1)
+    if grep -q "successful" <<<"$out"; then
+        echo "OK  pg2ch: параметры насоса приняты"
+    else
+        echo "$out" | tail -3
+        echo "FAIL pg2ch: параметры не приняты" >&2
+        exit 1
+    fi
+else
+    echo "SKIP pg2ch не собран"
+fi
+
+echo "== 2.1.2 выходные плагины: SQL над батчем =="
+for pair in "out_clickhouse clickhouse" "out_postgres postgres"; do
+    set -- $pair
+    so="$PLUGIN_DIR/flb-$1.so"
+    [ -e "$so" ] || { echo "SKIP $1 не собран"; continue; }
+    # table-режим и query-режим должны приниматься оба
+    a=$("$FLB" -e "$so" --dry-run -i dummy -o "$2" -p host=localhost \
+        -p table=t -p time_key=ts -p time_format=iso8601 2>&1)
+    b=$("$FLB" -e "$so" --dry-run -i dummy -o "$2" -p host=localhost \
+        -p 'query=INSERT INTO t SELECT 1' 2>&1)
+    if grep -q "successful" <<<"$a" && grep -q "successful" <<<"$b"; then
+        echo "OK  $2: приняты и table, и query"
+    else
+        echo "$a" | tail -2; echo "$b" | tail -2
+        echo "FAIL $2: параметры выхода не приняты" >&2
+        exit 1
+    fi
+done
+
+echo "== 2.1.3 TLS: по умолчанию выключен, но принимается =="
+# грабля, стоившая регрессии: FLB_INPUT_NET численно равен FLB_IO_OPT_TLS, и
+# лишний FLB_IO_TLS во флагах означает «всегда TLS» — плагин полез бы по HTTPS
+# на обычный порт. Проверяем, что tls принимается и что по умолчанию его нет
+for pair in "in_clickhouse -i clickhouse" "out_clickhouse -o clickhouse"; do
+    set -- $pair
+    so="$PLUGIN_DIR/flb-$1.so"
+    [ -e "$so" ] || { echo "SKIP $1 не собран"; continue; }
+    # -p относится к ПОСЛЕДНЕМУ объявленному плагину, поэтому свойства входа
+    # обязаны стоять до -o, иначе они уедут выходу
+    if [ "$2" = "-i" ]; then
+        head="-i $3 -p targets=localhost -p query=SELECT_1"
+        tail_args="-o null"
+    else
+        head="-i dummy -o $3 -p host=localhost -p table=t"
+        tail_args=""
+    fi
+    on=$("$FLB" -e "$so" --dry-run $head -p tls=on -p tls.verify=off $tail_args 2>&1)
+    off=$("$FLB" -e "$so" --dry-run $head $tail_args 2>&1)
+    if grep -q "successful" <<<"$on" && grep -q "successful" <<<"$off"; then
+        echo "OK  $3 ($2): tls принимается, без него — обычный TCP"
+    else
+        echo "$on" | tail -2; echo "$off" | tail -2
+        echo "FAIL $3: разбор tls сломан" >&2
+        exit 1
+    fi
+done
+
+echo "== 2.1.4 кольцевой буфер =="
+so="$PLUGIN_DIR/flb-out_ring.so"
+if [ -e "$so" ]; then
+    out=$("$FLB" -e "$so" --dry-run -i dummy -o ring -p host=127.0.0.1 \
+        -p port=2022 -p uri=/logs -p clear_uri=/logs/clear -p stats_uri=/stats \
+        -p ring_size=1M -p time_key=ts -p time_format=iso8601 2>&1)
+    if grep -q "successful" <<<"$out"; then
+        echo "OK  ring: параметры кольца приняты"
+    else
+        echo "$out" | tail -3
+        echo "FAIL ring: параметры не приняты" >&2
+        exit 1
+    fi
+else
+    echo "SKIP ring не собран"
+fi
+
+echo "== 2.2 библиотека запросов и примеры =="
+SHARE=/usr/local/share/fluent-bit
+for d in queries/pg queries/ch examples; do
+    n=$(ls "$SHARE/$d" 2>/dev/null | wc -l)
+    if [ "$n" -gt 0 ]; then
+        echo "OK  $SHARE/$d — файлов: $n"
+    else
+        echo "FAIL $SHARE/$d пуст — проверь COPY queries/examples в Dockerfile" >&2
+        exit 1
+    fi
+done
+
 echo "== 3. build features (fluent-bit --version / build flags) =="
 "$FLB" --version
 # наличие TLS/HTTP-сервера подтверждаем запуском с http-сервером ниже

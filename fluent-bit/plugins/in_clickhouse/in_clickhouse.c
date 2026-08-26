@@ -1,5 +1,6 @@
 /* in_clickhouse — входной плагин: выполняет SQL в ClickHouse по HTTP, строки
- * ответа (JSONEachRow) становятся записями.
+ * ответа (JSONEachRow) становятся записями (Mode logs) или метриками
+ * (Mode metrics).
  *
  * Загрузчик (src/flb_plugin.c) ищет в .so структуру `in_clickhouse_plugin`.
  * {CURSOR} — инкрементальное чтение журналов, с cursor_file переживает перезапуск.
@@ -13,9 +14,15 @@
 #include <fluent-bit/flb_config_map.h>
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_log_event_encoder.h>
+#include <fluent-bit/tls/flb_tls.h>
+
+#include "dbmetrics.h"
+
+#include <inttypes.h>
 
 #define DEFAULT_INTERVAL_SEC  "5"
 #define DEFAULT_PORT          8123
+#define DEFAULT_PORT_TLS      8443
 #define CURSOR_MAX            128
 
 /* Одна нода: соединение и её собственный курсор. */
@@ -38,14 +45,26 @@ struct flb_in_clickhouse {
     flb_sds_t user;
     flb_sds_t password;
     flb_sds_t database;
+    flb_sds_t instance_field;
+    flb_sds_t time_field;
     flb_sds_t cursor_field;
     flb_sds_t cursor_default;
     flb_sds_t cursor_file;
+    flb_sds_t cursor_type_conf;
+    flb_sds_t mode_conf;
+    flb_sds_t metric_prefix;
+    flb_sds_t metrics_tag;
+    flb_sds_t label_fields;
+    flb_sds_t value_fields;
     size_t buffer_max_size;
     int interval_sec;
     int interval_nsec;
 
     flb_sds_t sql;          /* текст запроса, прочитанный один раз */
+    int mode;               /* DBM_MODE_* */
+    int cursor_type;        /* DBM_CURSOR_* */
+    struct dbm_names labels;
+    struct dbm_names values;
     int coll_fd;
     struct flb_log_event_encoder log_encoder;
 };
@@ -144,6 +163,15 @@ static int parse_targets(struct flb_in_clickhouse *ctx, struct flb_config *confi
     char *item;
     char *colon;
     struct ch_target *t;
+    int io_flags;
+
+    /* TLS настраивает ядро: tls/tls.verify/tls.ca_file — его свойства, до
+     * config_map плагина они не доходят. Плагину остаётся взять готовый
+     * ins->tls и поднять флаг апстрима */
+    io_flags = FLB_IO_TCP;
+    if (ctx->ins->use_tls) {
+        io_flags |= FLB_IO_TLS;
+    }
 
     copy = flb_strdup(ctx->targets_conf);
     if (!copy) {
@@ -163,10 +191,11 @@ static int parse_targets(struct flb_in_clickhouse *ctx, struct flb_config *confi
             t->port = atoi(colon + 1);
         }
         if (t->port <= 0) {
-            t->port = DEFAULT_PORT;
+            t->port = ctx->ins->use_tls ? DEFAULT_PORT_TLS : DEFAULT_PORT;
         }
         t->host = flb_sds_create(item);
-        t->u = flb_upstream_create(config, t->host, t->port, FLB_IO_TCP, NULL);
+        t->u = flb_upstream_create(config, t->host, t->port, io_flags,
+                                   ctx->ins->tls);
         if (!t->u) {
             flb_plg_error(ctx->ins, "не создано соединение с %s:%i", t->host, t->port);
             flb_sds_destroy(t->host);
@@ -207,7 +236,20 @@ static flb_sds_t build_query(struct flb_in_clickhouse *ctx, struct ch_target *t)
         if (!value) {
             return NULL;
         }
-        flb_sds_printf(&value, "toDateTime64('%s', 6)", t->cursor);
+        /* по умолчанию курсор — время: сравнение DateTime64 со строкой в
+         * clickhouse не проходит, нужно явное приведение */
+        switch (ctx->cursor_type) {
+        case DBM_CURSOR_NUMBER:
+        case DBM_CURSOR_RAW:
+            flb_sds_printf(&value, "%s", t->cursor);
+            break;
+        case DBM_CURSOR_STRING:
+            flb_sds_printf(&value, "'%s'", t->cursor);
+            break;
+        default:
+            flb_sds_printf(&value, "toDateTime64('%s', 6)", t->cursor);
+            break;
+        }
     }
     else {
         value = flb_sds_create(ctx->cursor_default);
@@ -232,82 +274,278 @@ static flb_sds_t build_query(struct flb_in_clickhouse *ctx, struct ch_target *t)
     return out;
 }
 
-/* Значение строкового поля JSON без разбора всего объекта — нужно только курсору. */
-static int json_str_field(const char *line, size_t len, const char *field,
-                          char *out, size_t out_size)
-{
-    char key[128];
-    const char *p;
-    const char *end;
-    size_t n;
+/* ------------------------------------------------------------- разбор строки */
 
-    if (snprintf(key, sizeof(key), "\"%s\":", field) >= (int) sizeof(key)) {
+static int key_is(msgpack_object *key, const char *name, size_t name_len)
+{
+    return key->type == MSGPACK_OBJECT_STR &&
+           key->via.str.size == name_len &&
+           strncmp(key->via.str.ptr, name, name_len) == 0;
+}
+
+/* Значение как строка: в JSONEachRow строками приезжает почти всё, включая
+ * 64-битные целые (output_format_json_quote_64bit_integers включён по
+ * умолчанию) и время. */
+static int obj_str(msgpack_object *o, const char **ptr, size_t *len)
+{
+    if (o->type != MSGPACK_OBJECT_STR) {
         return -1;
     }
-    p = strstr(line, key);
-    if (!p || (size_t) (p - line) >= len) {
-        return -1;
-    }
-    p += strlen(key);
-    while (*p == ' ') {
-        p++;
-    }
-    if (*p != '"') {
-        return -1;
-    }
-    p++;
-    end = strchr(p, '"');
-    if (!end) {
-        return -1;
-    }
-    n = (size_t) (end - p);
-    if (n >= out_size) {
-        n = out_size - 1;
-    }
-    memcpy(out, p, n);
-    out[n] = '\0';
+    *ptr = o->via.str.ptr;
+    *len = o->via.str.size;
     return 0;
 }
 
-/* ------------------------------------------------------------------- сбор */
-
-static int emit_line(struct flb_in_clickhouse *ctx, const char *line, size_t len)
+/* Значение как число. Строку разбираем тоже — иначе половина счётчиков
+ * clickhouse в метрики не попадёт. */
+static int obj_number(msgpack_object *o, double *out)
 {
+    switch (o->type) {
+    case MSGPACK_OBJECT_POSITIVE_INTEGER:
+        *out = (double) o->via.u64;
+        return 0;
+    case MSGPACK_OBJECT_NEGATIVE_INTEGER:
+        *out = (double) o->via.i64;
+        return 0;
+    case MSGPACK_OBJECT_FLOAT32:
+    case MSGPACK_OBJECT_FLOAT64:
+        *out = o->via.f64;
+        return 0;
+    case MSGPACK_OBJECT_BOOLEAN:
+        *out = o->via.boolean ? 1 : 0;
+        return 0;
+    case MSGPACK_OBJECT_STR:
+        return dbm_number(o->via.str.ptr, o->via.str.size, out);
+    default:
+        return -1;
+    }
+}
+
+/* Запись: тело — разобранный объект как есть. Имя ноды добавляется только
+ * если запроса его не отдал: hostName() точнее, чем адрес из targets. */
+static int emit_log(struct flb_in_clickhouse *ctx, struct ch_target *t,
+                    msgpack_object *root, const char *mp_buf, size_t mp_size,
+                    struct flb_time *tm, int has_instance)
+{
+    msgpack_sbuffer sbuf;
+    msgpack_packer pk;
+    uint32_t i;
     int ret;
-    int root_type;
+
+    ret = flb_log_event_encoder_begin_record(&ctx->log_encoder);
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_set_timestamp(&ctx->log_encoder, tm);
+    }
+    if (ret != FLB_EVENT_ENCODER_SUCCESS) {
+        flb_log_event_encoder_rollback_record(&ctx->log_encoder);
+        return -1;
+    }
+
+    if (has_instance || !ctx->instance_field ||
+        flb_sds_len(ctx->instance_field) == 0) {
+        ret = flb_log_event_encoder_set_body_from_raw_msgpack(&ctx->log_encoder,
+                                                              (char *) mp_buf,
+                                                              mp_size);
+    }
+    else {
+        /* добавить пару в готовый msgpack нельзя — карта пересобирается */
+        msgpack_sbuffer_init(&sbuf);
+        msgpack_packer_init(&pk, &sbuf, msgpack_sbuffer_write);
+        msgpack_pack_map(&pk, root->via.map.size + 1);
+        msgpack_pack_str(&pk, flb_sds_len(ctx->instance_field));
+        msgpack_pack_str_body(&pk, ctx->instance_field,
+                              flb_sds_len(ctx->instance_field));
+        msgpack_pack_str(&pk, flb_sds_len(t->host));
+        msgpack_pack_str_body(&pk, t->host, flb_sds_len(t->host));
+        for (i = 0; i < root->via.map.size; i++) {
+            msgpack_pack_object(&pk, root->via.map.ptr[i].key);
+            msgpack_pack_object(&pk, root->via.map.ptr[i].val);
+        }
+        ret = flb_log_event_encoder_set_body_from_raw_msgpack(&ctx->log_encoder,
+                                                              sbuf.data,
+                                                              sbuf.size);
+        msgpack_sbuffer_destroy(&sbuf);
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_commit_record(&ctx->log_encoder);
+    }
+    if (ret != FLB_EVENT_ENCODER_SUCCESS) {
+        flb_plg_error(ctx->ins, "запись не закодирована: %i", ret);
+        flb_log_event_encoder_rollback_record(&ctx->log_encoder);
+        return -1;
+    }
+    return 0;
+}
+
+/* Строка ответа → значения gauge. Метки заполняются первым проходом: их
+ * значения нужны раньше, чем встретится первый числовой столбец. */
+static void emit_metrics(struct flb_in_clickhouse *ctx, struct ch_target *t,
+                         msgpack_object *root, struct dbm_set *set,
+                         struct flb_time *tm, const char *instance)
+{
+    uint64_t ts = flb_time_to_nanosec(tm);
+    msgpack_object *key;
+    msgpack_object *val;
+    const char *name;
+    size_t name_len;
+    const char *str;
+    size_t str_len;
+    double value;
+    uint32_t i;
+    int idx;
+
+    dbm_set_row_begin(set, instance ? instance : t->host);
+
+    for (i = 0; i < root->via.map.size; i++) {
+        key = &root->via.map.ptr[i].key;
+        if (key->type != MSGPACK_OBJECT_STR) {
+            continue;
+        }
+        idx = dbm_names_index(&ctx->labels, key->via.str.ptr, key->via.str.size);
+        if (idx >= 0 &&
+            obj_str(&root->via.map.ptr[i].val, &str, &str_len) == 0) {
+            dbm_set_label(set, idx, str, str_len);
+        }
+    }
+
+    for (i = 0; i < root->via.map.size; i++) {
+        key = &root->via.map.ptr[i].key;
+        val = &root->via.map.ptr[i].val;
+        if (key->type != MSGPACK_OBJECT_STR) {
+            continue;
+        }
+        name = key->via.str.ptr;
+        name_len = key->via.str.size;
+
+        if (dbm_names_has(&ctx->labels, name, name_len)) {
+            continue;
+        }
+        /* явный список важнее автоопределения: без него в метрики уедет
+         * любой столбец, который разбирается в число */
+        if (ctx->values.count > 0) {
+            if (!dbm_names_has(&ctx->values, name, name_len)) {
+                continue;
+            }
+        }
+        else {
+            if (ctx->time_field && flb_sds_len(ctx->time_field) > 0 &&
+                key_is(key, ctx->time_field, flb_sds_len(ctx->time_field))) {
+                continue;
+            }
+            if (ctx->instance_field && flb_sds_len(ctx->instance_field) > 0 &&
+                key_is(key, ctx->instance_field, flb_sds_len(ctx->instance_field))) {
+                continue;
+            }
+        }
+
+        if (obj_number(val, &value) != 0) {
+            continue;
+        }
+        dbm_set_value(set, ctx->ins, ctx->metric_prefix, name, name_len,
+                      value, ts);
+    }
+}
+
+/* Одна строка JSONEachRow. newest получает значение курсора, если оно больше
+ * уже увиденного в этом ответе. */
+static int process_line(struct flb_in_clickhouse *ctx, struct ch_target *t,
+                        const char *line, size_t len, struct dbm_set *set,
+                        char *newest, size_t newest_size)
+{
     char *mp_buf = NULL;
     size_t mp_size = 0;
+    size_t off = 0;
+    int root_type;
     size_t consumed = 0;
+    msgpack_unpacked upk;
+    msgpack_object *root;
+    msgpack_object *key;
     struct flb_time tm;
+    const char *instance = NULL;
+    char instance_buf[256];
+    const char *str;
+    size_t str_len;
+    uint32_t i;
+    int has_time = 0;
+    int has_instance = 0;
+    int ret = -1;
 
-    ret = flb_pack_json(line, len, &mp_buf, &mp_size, &root_type, &consumed);
-    if (ret != 0) {
+    if (flb_pack_json(line, len, &mp_buf, &mp_size, &root_type, &consumed) != 0) {
         flb_plg_warn(ctx->ins, "строка ответа не разобрана как JSON");
         return -1;
     }
 
-    flb_time_get(&tm);
-    ret = flb_log_event_encoder_begin_record(&ctx->log_encoder);
-    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        ret = flb_log_event_encoder_set_timestamp(&ctx->log_encoder, &tm);
+    msgpack_unpacked_init(&upk);
+    if (msgpack_unpack_next(&upk, mp_buf, mp_size, &off) != MSGPACK_UNPACK_SUCCESS ||
+        upk.data.type != MSGPACK_OBJECT_MAP) {
+        flb_plg_warn(ctx->ins, "строка ответа — не объект JSON");
+        goto done;
     }
-    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        ret = flb_log_event_encoder_set_body_from_raw_msgpack(&ctx->log_encoder,
-                                                             mp_buf, mp_size);
-    }
-    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        ret = flb_log_event_encoder_commit_record(&ctx->log_encoder);
-    }
-    flb_free(mp_buf);
+    root = &upk.data;
 
-    if (ret != FLB_EVENT_ENCODER_SUCCESS) {
-        flb_plg_error(ctx->ins, "запись не закодирована: %i", ret);
-        return -1;
+    flb_time_get(&tm);
+    for (i = 0; i < root->via.map.size; i++) {
+        key = &root->via.map.ptr[i].key;
+        if (key->type != MSGPACK_OBJECT_STR) {
+            continue;
+        }
+        if (!has_time && ctx->time_field && flb_sds_len(ctx->time_field) > 0 &&
+            key_is(key, ctx->time_field, flb_sds_len(ctx->time_field)) &&
+            obj_str(&root->via.map.ptr[i].val, &str, &str_len) == 0) {
+            has_time = (dbm_time(str, str_len, &tm) == 0);
+        }
+        if (!has_instance && ctx->instance_field &&
+            flb_sds_len(ctx->instance_field) > 0 &&
+            key_is(key, ctx->instance_field, flb_sds_len(ctx->instance_field)) &&
+            obj_str(&root->via.map.ptr[i].val, &str, &str_len) == 0) {
+            snprintf(instance_buf, sizeof(instance_buf), "%.*s",
+                     (int) str_len, str);
+            instance = instance_buf;
+            has_instance = 1;
+        }
+        if (newest && ctx->cursor_field && flb_sds_len(ctx->cursor_field) > 0 &&
+            key_is(key, ctx->cursor_field, flb_sds_len(ctx->cursor_field))) {
+            char value[CURSOR_MAX];
+            msgpack_object *v = &root->via.map.ptr[i].val;
+            if (obj_str(v, &str, &str_len) == 0) {
+                snprintf(value, sizeof(value), "%.*s", (int) str_len, str);
+            }
+            else if (v->type == MSGPACK_OBJECT_POSITIVE_INTEGER) {
+                snprintf(value, sizeof(value), "%" PRIu64, v->via.u64);
+            }
+            else {
+                value[0] = '\0';
+            }
+            /* строковое сравнение годится и для чисел одинаковой ширины, и
+             * для времени в ISO-виде: и то, и другое упорядочено лексически */
+            if (value[0] != '\0' &&
+                (newest[0] == '\0' || strcmp(value, newest) > 0)) {
+                snprintf(newest, newest_size, "%s", value);
+            }
+        }
     }
-    return 0;
+
+    if (ctx->mode != DBM_MODE_METRICS) {
+        if (emit_log(ctx, t, root, mp_buf, mp_size, &tm, has_instance) != 0) {
+            goto done;
+        }
+    }
+    if (set) {
+        emit_metrics(ctx, t, root, set, &tm, instance);
+    }
+    ret = 0;
+
+done:
+    msgpack_unpacked_destroy(&upk);
+    flb_free(mp_buf);
+    return ret;
 }
 
-static void collect_target(struct flb_in_clickhouse *ctx, struct ch_target *t)
+/* ------------------------------------------------------------------- сбор */
+
+static void collect_target(struct flb_in_clickhouse *ctx, struct ch_target *t,
+                           struct dbm_set *set)
 {
     struct flb_connection *conn;
     struct flb_http_client *client;
@@ -384,17 +622,9 @@ static void collect_target(struct flb_in_clickhouse *ctx, struct ch_target *t)
         nl = memchr(line, '\n', (body + body_len) - line);
         line_len = nl ? (size_t) (nl - line) : (size_t) ((body + body_len) - line);
         if (line_len > 0) {
-            if (emit_line(ctx, line, line_len) == 0) {
+            if (process_line(ctx, t, line, line_len, set,
+                             newest, sizeof(newest)) == 0) {
                 rows++;
-                if (ctx->cursor_field && flb_sds_len(ctx->cursor_field) > 0) {
-                    char value[CURSOR_MAX];
-                    if (json_str_field(line, line_len, ctx->cursor_field,
-                                       value, sizeof(value)) == 0) {
-                        if (newest[0] == '\0' || strcmp(value, newest) > 0) {
-                            memcpy(newest, value, sizeof(value));
-                        }
-                    }
-                }
             }
         }
         if (!nl) {
@@ -404,10 +634,12 @@ static void collect_target(struct flb_in_clickhouse *ctx, struct ch_target *t)
     }
 
     if (rows > 0) {
-        flb_input_log_append(ctx->ins, NULL, 0,
-                             ctx->log_encoder.output_buffer,
-                             ctx->log_encoder.output_length);
-        flb_log_event_encoder_reset(&ctx->log_encoder);
+        if (ctx->mode != DBM_MODE_METRICS) {
+            flb_input_log_append(ctx->ins, NULL, 0,
+                                 ctx->log_encoder.output_buffer,
+                                 ctx->log_encoder.output_length);
+            flb_log_event_encoder_reset(&ctx->log_encoder);
+        }
         if (newest[0] != '\0') {
             memcpy(t->cursor, newest, sizeof(newest));
             cursor_save(ctx, t);
@@ -428,13 +660,38 @@ static int cb_collect(struct flb_input_instance *ins,
     struct flb_in_clickhouse *ctx = in_context;
     struct mk_list *head;
     struct ch_target *t;
+    struct dbm_set set;
+    struct dbm_set *set_ptr = NULL;
+    const char *tag = NULL;
+    size_t tag_len = 0;
 
     (void) ins;
     (void) config;
 
+    /* набор один на цикл: у метрики фиксированный набор меток, а ноды
+     * различаются значением instance — им нужен общий gauge, а не свой */
+    if (ctx->mode != DBM_MODE_LOGS) {
+        if (dbm_set_init(&set, ctx->instance_field, &ctx->labels) != 0) {
+            flb_plg_error(ctx->ins, "набор метрик не создан");
+            return -1;
+        }
+        set_ptr = &set;
+    }
+
     mk_list_foreach(head, &ctx->targets) {
         t = mk_list_entry(head, struct ch_target, _head);
-        collect_target(ctx, t);
+        collect_target(ctx, t, set_ptr);
+    }
+
+    if (set_ptr) {
+        /* свой тег нужен, когда включён режим both: одному выходу нельзя
+         * отдать и записи, и метрики — разбирать их он будет по-разному */
+        if (ctx->metrics_tag && flb_sds_len(ctx->metrics_tag) > 0) {
+            tag = ctx->metrics_tag;
+            tag_len = flb_sds_len(ctx->metrics_tag);
+        }
+        flb_input_metrics_append(ctx->ins, tag, tag_len, set.cmt);
+        dbm_set_destroy(&set);
     }
     return 0;
 }
@@ -455,6 +712,7 @@ static int cb_init(struct flb_input_instance *ins,
         return -1;
     }
     ctx->ins = ins;
+    ctx->coll_fd = -1;
     mk_list_init(&ctx->targets);
 
     ret = flb_input_config_map_set(ins, (void *) ctx);
@@ -462,10 +720,27 @@ static int cb_init(struct flb_input_instance *ins,
         flb_free(ctx);
         return -1;
     }
+    flb_input_set_context(ins, ctx);
+
+    ctx->mode = dbm_mode_parse(ctx->mode_conf);
+    if (ctx->mode < 0) {
+        flb_plg_error(ins, "mode: logs, metrics или both (задано %s)", ctx->mode_conf);
+        return -1;
+    }
+    ctx->cursor_type = dbm_cursor_type_parse(ctx->cursor_type_conf);
+    if (ctx->cursor_type < 0) {
+        flb_plg_error(ins, "cursor_type: datetime64, string, number или raw (задано %s)",
+                      ctx->cursor_type_conf);
+        return -1;
+    }
+    if (dbm_names_init(&ctx->labels, ctx->label_fields) != 0 ||
+        dbm_names_init(&ctx->values, ctx->value_fields) != 0) {
+        flb_plg_error(ins, "не разобраны label_fields/value_fields");
+        return -1;
+    }
 
     if (!ctx->targets_conf || flb_sds_len(ctx->targets_conf) == 0) {
         flb_plg_error(ins, "нужен параметр targets: host:port[,host:port]");
-        flb_free(ctx);
         return -1;
     }
 
@@ -478,13 +753,11 @@ static int cb_init(struct flb_input_instance *ins,
     }
     if (!ctx->sql) {
         flb_plg_error(ins, "нужен query или query_file");
-        flb_free(ctx);
         return -1;
     }
 
+
     if (parse_targets(ctx, config) != 0) {
-        flb_sds_destroy(ctx->sql);
-        flb_free(ctx);
         return -1;
     }
 
@@ -492,12 +765,8 @@ static int cb_init(struct flb_input_instance *ins,
                                      FLB_LOG_EVENT_FORMAT_DEFAULT);
     if (ret != FLB_EVENT_ENCODER_SUCCESS) {
         flb_plg_error(ins, "кодировщик записей не поднялся: %i", ret);
-        flb_sds_destroy(ctx->sql);
-        flb_free(ctx);
         return -1;
     }
-
-    flb_input_set_context(ins, ctx);
 
     ret = flb_input_set_collector_time(ins, cb_collect,
                                        ctx->interval_sec, ctx->interval_nsec,
@@ -508,23 +777,35 @@ static int cb_init(struct flb_input_instance *ins,
     }
     ctx->coll_fd = ret;
 
-    flb_plg_info(ins, "опрос каждые %i с, нод %i",
-                 ctx->interval_sec, mk_list_size(&ctx->targets));
+    flb_plg_info(ins, "опрос каждые %i с, нод %i, режим %s",
+                 ctx->interval_sec, mk_list_size(&ctx->targets), ctx->mode_conf);
+    if (ctx->mode != DBM_MODE_LOGS) {
+        flb_plg_info(ins, "метрики: префикс %s, метки %s%s%s",
+                     ctx->metric_prefix,
+                     ctx->instance_field && flb_sds_len(ctx->instance_field) > 0 ?
+                         ctx->instance_field : "—",
+                     ctx->labels.count > 0 ? ", " : "",
+                     ctx->labels.count > 0 ? ctx->label_fields : "");
+    }
     return 0;
 }
 
 static void cb_pause(void *data, struct flb_config *config)
 {
     struct flb_in_clickhouse *ctx = data;
-    flb_input_collector_pause(ctx->coll_fd, ctx->ins);
     (void) config;
+    if (ctx->coll_fd >= 0) {
+        flb_input_collector_pause(ctx->coll_fd, ctx->ins);
+    }
 }
 
 static void cb_resume(void *data, struct flb_config *config)
 {
     struct flb_in_clickhouse *ctx = data;
-    flb_input_collector_resume(ctx->coll_fd, ctx->ins);
     (void) config;
+    if (ctx->coll_fd >= 0) {
+        flb_input_collector_resume(ctx->coll_fd, ctx->ins);
+    }
 }
 
 static int cb_exit(void *data, struct flb_config *config)
@@ -550,10 +831,14 @@ static int cb_exit(void *data, struct flb_config *config)
         flb_free(t);
     }
 
-    flb_log_event_encoder_destroy(&ctx->log_encoder);
+    if (ctx->coll_fd >= 0) {
+        flb_log_event_encoder_destroy(&ctx->log_encoder);
+    }
     if (ctx->sql) {
         flb_sds_destroy(ctx->sql);
     }
+    dbm_names_destroy(&ctx->labels);
+    dbm_names_destroy(&ctx->values);
     flb_free(ctx);
     return 0;
 }
@@ -590,6 +875,16 @@ static struct flb_config_map config_map[] = {
      "База по умолчанию"
     },
     {
+     FLB_CONFIG_MAP_STR, "instance_field", "instance",
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, instance_field),
+     "Поле с именем ноды; если запрос его не отдал (hostName()), плагин добавит сам"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "time_field", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, time_field),
+     "Поле со временем события; без него берётся время опроса"
+    },
+    {
      FLB_CONFIG_MAP_STR, "cursor_field", NULL,
      0, FLB_TRUE, offsetof(struct flb_in_clickhouse, cursor_field),
      "Поле ответа, из которого берётся курсор для {CURSOR}"
@@ -603,6 +898,36 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_STR, "cursor_file", NULL,
      0, FLB_TRUE, offsetof(struct flb_in_clickhouse, cursor_file),
      "Путь-основа для хранения курсора между перезапусками (на ноду свой файл)"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "cursor_type", "datetime64",
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, cursor_type_conf),
+     "Как подставлять курсор: datetime64, string, number или raw"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "mode", "logs",
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, mode_conf),
+     "Что отдавать: logs (записи), metrics (метрики) или both"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "metric_prefix", "clickhouse",
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, metric_prefix),
+     "Общее начало имени метрик: <префикс>_<поле>"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "metrics_tag", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, metrics_tag),
+     "Тег метрик; нужен в режиме both, чтобы отделить их от записей"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "label_fields", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, label_fields),
+     "Поля-метки через запятую; instance добавляется сам"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "value_fields", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_clickhouse, value_fields),
+     "Поля-значения через запятую; пусто — все числовые, кроме меток"
     },
     {
      FLB_CONFIG_MAP_SIZE, "buffer_max_size", "0",
@@ -624,7 +949,7 @@ static struct flb_config_map config_map[] = {
 
 struct flb_input_plugin in_clickhouse_plugin = {
     .name         = "clickhouse",
-    .description  = "ClickHouse SQL (JSONEachRow) input",
+    .description  = "ClickHouse SQL (JSONEachRow) input: записи или метрики",
     .cb_init      = cb_init,
     .cb_pre_run   = NULL,
     .cb_collect   = cb_collect,
@@ -633,5 +958,8 @@ struct flb_input_plugin in_clickhouse_plugin = {
     .cb_resume    = cb_resume,
     .cb_exit      = cb_exit,
     .config_map   = config_map,
+    /* FLB_INPUT_NET численно совпадает с FLB_IO_OPT_TLS, поэтому «tls по
+     * желанию» ядро включает уже по нему. Дописывать FLB_IO_TLS нельзя: это
+     * означает «всегда TLS», и плагин полез бы по HTTPS на обычный порт */
     .flags        = FLB_INPUT_NET,
 };

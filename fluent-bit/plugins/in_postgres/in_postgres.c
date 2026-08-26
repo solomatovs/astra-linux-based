@@ -1,5 +1,5 @@
-/* in_pgsql — входной плагин: выполняет SQL в PostgreSQL, строки результата
- * становятся записями.
+/* in_postgres — входной плагин: выполняет SQL в PostgreSQL, строки результата
+ * становятся записями (Mode logs) или метриками (Mode metrics).
  *
  * libpq не линкуется: она уже в бинарнике ради out_pgsql, а fluent-bit собран
  * с ENABLE_EXPORTS — символы PQ* видны из .so. Оттуда же берётся GSSAPI.
@@ -14,6 +14,8 @@
 #include <fluent-bit/flb_log_event_encoder.h>
 
 #include <libpq-fe.h>
+
+#include "dbmetrics.h"
 
 #define DEFAULT_INTERVAL_SEC  "5"
 #define DEFAULT_PORT          "5432"
@@ -41,7 +43,7 @@ struct pg_target {
     struct mk_list _head;
 };
 
-struct flb_in_pgsql {
+struct flb_in_postgres {
     struct flb_input_instance *ins;
     struct mk_list targets;
 
@@ -57,6 +59,13 @@ struct flb_in_pgsql {
     flb_sds_t cursor_field;
     flb_sds_t cursor_default;
     flb_sds_t cursor_file;
+    flb_sds_t cursor_type_conf;
+    flb_sds_t time_field;
+    flb_sds_t mode_conf;
+    flb_sds_t metric_prefix;
+    flb_sds_t metrics_tag;
+    flb_sds_t label_fields;
+    flb_sds_t value_fields;
     int connect_timeout;
     int statement_timeout;
     int retry_pause_sec;
@@ -64,6 +73,10 @@ struct flb_in_pgsql {
     int interval_nsec;
 
     flb_sds_t sql;          /* текст запроса, прочитанный один раз */
+    int mode;               /* DBM_MODE_* */
+    int cursor_type;        /* DBM_CURSOR_* */
+    struct dbm_names labels;
+    struct dbm_names values;
     int coll_fd;
     struct flb_log_event_encoder log_encoder;
 };
@@ -104,13 +117,13 @@ static flb_sds_t read_file(struct flb_input_instance *ins, const char *path)
 
 /* Файл курсора сервера: <cursor_file>.<host>-<port>. Отдельный на сервер —
  * курсоры независимы, общий файл затирал бы соседний. */
-static void cursor_path(struct flb_in_pgsql *ctx, struct pg_target *t,
+static void cursor_path(struct flb_in_postgres *ctx, struct pg_target *t,
                         char *out, size_t out_size)
 {
     snprintf(out, out_size, "%s.%s-%s", ctx->cursor_file, t->host, t->port);
 }
 
-static void cursor_load(struct flb_in_pgsql *ctx, struct pg_target *t)
+static void cursor_load(struct flb_in_postgres *ctx, struct pg_target *t)
 {
     char path[512];
     FILE *fp;
@@ -136,7 +149,7 @@ static void cursor_load(struct flb_in_pgsql *ctx, struct pg_target *t)
     }
 }
 
-static void cursor_save(struct flb_in_pgsql *ctx, struct pg_target *t)
+static void cursor_save(struct flb_in_postgres *ctx, struct pg_target *t)
 {
     char path[512];
     FILE *fp;
@@ -155,7 +168,7 @@ static void cursor_save(struct flb_in_pgsql *ctx, struct pg_target *t)
 }
 
 /* "host:port,host2" → список серверов */
-static int parse_targets(struct flb_in_pgsql *ctx)
+static int parse_targets(struct flb_in_postgres *ctx)
 {
     char *copy;
     char *save = NULL;
@@ -199,7 +212,7 @@ static int parse_targets(struct flb_in_pgsql *ctx)
 }
 
 /* Подстановка {CURSOR}: без курсора — значение по умолчанию из конфигурации. */
-static flb_sds_t build_query(struct flb_in_pgsql *ctx, struct pg_target *t)
+static flb_sds_t build_query(struct flb_in_postgres *ctx, struct pg_target *t)
 {
     flb_sds_t out;
     const char *p;
@@ -215,7 +228,17 @@ static flb_sds_t build_query(struct flb_in_pgsql *ctx, struct pg_target *t)
         if (!value) {
             return NULL;
         }
-        flb_sds_printf(&value, "'%s'", t->cursor);
+        /* строку надо закавычить, число — нельзя: '42' > 41 в postgres не
+         * сравнится, типы не приводятся молча */
+        switch (ctx->cursor_type) {
+        case DBM_CURSOR_NUMBER:
+        case DBM_CURSOR_RAW:
+            flb_sds_printf(&value, "%s", t->cursor);
+            break;
+        default:
+            flb_sds_printf(&value, "'%s'", t->cursor);
+            break;
+        }
     }
     else {
         value = flb_sds_create(ctx->cursor_default);
@@ -258,7 +281,7 @@ static void conninfo_add(flb_sds_t *out, const char *key, const char *value)
     flb_sds_cat_safe(out, "' ", 2);
 }
 
-static int connect_target(struct flb_in_pgsql *ctx, struct pg_target *t)
+static int connect_target(struct flb_in_postgres *ctx, struct pg_target *t)
 {
     flb_sds_t conninfo;
     char timeout[32];
@@ -333,7 +356,7 @@ static int connect_target(struct flb_in_pgsql *ctx, struct pg_target *t)
 /* ------------------------------------------------------------------- сбор */
 
 /* Значение одной ячейки — своим типом, а не строкой. */
-static int append_value(struct flb_in_pgsql *ctx, PGresult *res, int row, int col)
+static int append_value(struct flb_in_postgres *ctx, PGresult *res, int row, int col)
 {
     char *raw;
     int len;
@@ -394,22 +417,43 @@ static int append_value(struct flb_in_pgsql *ctx, PGresult *res, int row, int co
                                                raw, (size_t) len);
 }
 
-static int emit_row(struct flb_in_pgsql *ctx, struct pg_target *t,
-                    PGresult *res, int row, int cols)
+/* Время строки: из time_field, если он задан и разобрался, иначе время опроса.
+ * Для журналов это принципиально: событие произошло не тогда, когда его
+ * забрали, а на несколько секунд раньше. */
+static void row_time(struct flb_in_postgres *ctx, PGresult *res, int row,
+                     int time_col, struct flb_time *tm)
+{
+    const char *raw;
+
+    if (time_col >= 0 && !PQgetisnull(res, row, time_col)) {
+        raw = PQgetvalue(res, row, time_col);
+        if (dbm_time(raw, (size_t) PQgetlength(res, row, time_col), tm) == 0) {
+            return;
+        }
+        flb_plg_debug(ctx->ins, "время не разобрано, берётся время опроса: %s", raw);
+    }
+    flb_time_get(tm);
+}
+
+static int emit_row(struct flb_in_postgres *ctx, struct pg_target *t,
+                    PGresult *res, int row, int cols, int time_col,
+                    int instance_col)
 {
     struct flb_time tm;
     int ret;
     int col;
 
-    flb_time_get(&tm);
+    row_time(ctx, res, row, time_col, &tm);
     ret = flb_log_event_encoder_begin_record(&ctx->log_encoder);
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
         ret = flb_log_event_encoder_set_timestamp(&ctx->log_encoder, &tm);
     }
 
     /* имя сервера добавляет плагин: у postgres нет своего hostName(), а
-     * различать источники на той стороне надо */
-    if (ret == FLB_EVENT_ENCODER_SUCCESS &&
+     * различать источники на той стороне надо. Если запрос уже отдаёт столбец
+     * с таким именем — своё не добавляем: два ключа с одним именем в записи
+     * хуже, чем менее точное имя */
+    if (ret == FLB_EVENT_ENCODER_SUCCESS && instance_col < 0 &&
         ctx->instance_field && flb_sds_len(ctx->instance_field) > 0) {
         ret = flb_log_event_encoder_append_string(&ctx->log_encoder,
                                                   FLB_LOG_EVENT_BODY,
@@ -442,7 +486,99 @@ static int emit_row(struct flb_in_pgsql *ctx, struct pg_target *t,
     return 0;
 }
 
-static void collect_target(struct flb_in_pgsql *ctx, struct pg_target *t)
+/* Числовое значение ячейки для метрики. Строки в метрику не превращаются:
+ * их место — в метках либо в записи. */
+static int metric_value(PGresult *res, int row, int col, double *out)
+{
+    const char *raw;
+    Oid type;
+
+    if (PQgetisnull(res, row, col)) {
+        return -1;
+    }
+
+    raw = PQgetvalue(res, row, col);
+    type = PQftype(res, col);
+
+    switch (type) {
+    case OID_BOOL:
+        *out = (raw[0] == 't') ? 1 : 0;
+        return 0;
+    case OID_INT2:
+    case OID_INT4:
+    case OID_INT8:
+    case OID_FLOAT4:
+    case OID_FLOAT8:
+    case OID_NUMERIC:
+        return dbm_number(raw, (size_t) PQgetlength(res, row, col), out);
+    default:
+        return -1;
+    }
+}
+
+/* Строка результата → значения gauge. Метки заполняются первым проходом:
+ * их значения нужны раньше, чем встретится первый числовой столбец. */
+static void emit_metrics(struct flb_in_postgres *ctx, struct pg_target *t,
+                         PGresult *res, int row, int cols,
+                         struct dbm_set *set, int time_col, int instance_col)
+{
+    struct flb_time tm;
+    uint64_t ts;
+    const char *name;
+    size_t name_len;
+    double value;
+    int col;
+    int idx;
+
+    row_time(ctx, res, row, time_col, &tm);
+    ts = flb_time_to_nanosec(&tm);
+
+    /* имя из запроса точнее имени из targets: там может быть адрес балансира
+     * или алиас, а сервер знает себя сам */
+    if (instance_col >= 0 && !PQgetisnull(res, row, instance_col)) {
+        dbm_set_row_begin(set, PQgetvalue(res, row, instance_col));
+    }
+    else {
+        dbm_set_row_begin(set, t->host);
+    }
+
+    for (col = 0; col < cols; col++) {
+        name = PQfname(res, col);
+        idx = dbm_names_index(&ctx->labels, name, strlen(name));
+        if (idx >= 0 && !PQgetisnull(res, row, col)) {
+            dbm_set_label(set, idx, PQgetvalue(res, row, col),
+                          (size_t) PQgetlength(res, row, col));
+        }
+    }
+
+    for (col = 0; col < cols; col++) {
+        name = PQfname(res, col);
+        name_len = strlen(name);
+
+        if (dbm_names_has(&ctx->labels, name, name_len)) {
+            continue;
+        }
+        /* явный список важнее автоопределения: с ним в метрики не уедет
+         * случайный числовой столбец вроде pid или oid */
+        if (ctx->values.count > 0) {
+            if (!dbm_names_has(&ctx->values, name, name_len)) {
+                continue;
+            }
+        }
+        else if (col == time_col || col == instance_col) {
+            continue;
+        }
+
+        if (metric_value(res, row, col, &value) != 0) {
+            continue;
+        }
+        dbm_set_value(set, ctx->ins, ctx->metric_prefix, name, name_len,
+                      value, ts);
+    }
+}
+
+static void collect_target(struct flb_in_postgres *ctx, struct pg_target *t,
+                           struct dbm_set *set)
 {
     flb_sds_t query;
     PGresult *res;
@@ -450,6 +586,8 @@ static void collect_target(struct flb_in_pgsql *ctx, struct pg_target *t)
     int cols;
     int row;
     int cursor_col = -1;
+    int time_col = -1;
+    int instance_col = -1;
     char newest[CURSOR_MAX];
     int emitted = 0;
 
@@ -484,11 +622,21 @@ static void collect_target(struct flb_in_pgsql *ctx, struct pg_target *t)
     if (ctx->cursor_field && flb_sds_len(ctx->cursor_field) > 0) {
         cursor_col = PQfnumber(res, ctx->cursor_field);
     }
+    if (ctx->time_field && flb_sds_len(ctx->time_field) > 0) {
+        time_col = PQfnumber(res, ctx->time_field);
+    }
+    if (ctx->instance_field && flb_sds_len(ctx->instance_field) > 0) {
+        instance_col = PQfnumber(res, ctx->instance_field);
+    }
     newest[0] = '\0';
 
     for (row = 0; row < rows; row++) {
-        if (emit_row(ctx, t, res, row, cols) != 0) {
+        if (ctx->mode != DBM_MODE_METRICS &&
+            emit_row(ctx, t, res, row, cols, time_col, instance_col) != 0) {
             continue;
+        }
+        if (set) {
+            emit_metrics(ctx, t, res, row, cols, set, time_col, instance_col);
         }
         emitted++;
         if (cursor_col >= 0 && !PQgetisnull(res, row, cursor_col)) {
@@ -500,10 +648,12 @@ static void collect_target(struct flb_in_pgsql *ctx, struct pg_target *t)
     }
 
     if (emitted > 0) {
-        flb_input_log_append(ctx->ins, NULL, 0,
-                             ctx->log_encoder.output_buffer,
-                             ctx->log_encoder.output_length);
-        flb_log_event_encoder_reset(&ctx->log_encoder);
+        if (ctx->mode != DBM_MODE_METRICS) {
+            flb_input_log_append(ctx->ins, NULL, 0,
+                                 ctx->log_encoder.output_buffer,
+                                 ctx->log_encoder.output_length);
+            flb_log_event_encoder_reset(&ctx->log_encoder);
+        }
         if (newest[0] != '\0') {
             memcpy(t->cursor, newest, sizeof(newest));
             cursor_save(ctx, t);
@@ -517,16 +667,41 @@ static void collect_target(struct flb_in_pgsql *ctx, struct pg_target *t)
 static int cb_collect(struct flb_input_instance *ins,
                       struct flb_config *config, void *in_context)
 {
-    struct flb_in_pgsql *ctx = in_context;
+    struct flb_in_postgres *ctx = in_context;
     struct mk_list *head;
     struct pg_target *t;
+    struct dbm_set set;
+    struct dbm_set *set_ptr = NULL;
+    const char *tag = NULL;
+    size_t tag_len = 0;
 
     (void) ins;
     (void) config;
 
+    /* набор один на цикл: у метрики фиксированный набор меток, а серверы
+     * различаются значением instance — им нужен общий gauge, а не свой */
+    if (ctx->mode != DBM_MODE_LOGS) {
+        if (dbm_set_init(&set, ctx->instance_field, &ctx->labels) != 0) {
+            flb_plg_error(ctx->ins, "набор метрик не создан");
+            return -1;
+        }
+        set_ptr = &set;
+    }
+
     mk_list_foreach(head, &ctx->targets) {
         t = mk_list_entry(head, struct pg_target, _head);
-        collect_target(ctx, t);
+        collect_target(ctx, t, set_ptr);
+    }
+
+    if (set_ptr) {
+        /* свой тег нужен, когда включён режим both: одному выходу нельзя
+         * отдать и записи, и метрики — разбирать их он будет по-разному */
+        if (ctx->metrics_tag && flb_sds_len(ctx->metrics_tag) > 0) {
+            tag = ctx->metrics_tag;
+            tag_len = flb_sds_len(ctx->metrics_tag);
+        }
+        flb_input_metrics_append(ctx->ins, tag, tag_len, set.cmt);
+        dbm_set_destroy(&set);
     }
     return 0;
 }
@@ -536,12 +711,12 @@ static int cb_collect(struct flb_input_instance *ins,
 static int cb_init(struct flb_input_instance *ins,
                    struct flb_config *config, void *data)
 {
-    struct flb_in_pgsql *ctx;
+    struct flb_in_postgres *ctx;
     int ret;
 
     (void) data;
 
-    ctx = flb_calloc(1, sizeof(struct flb_in_pgsql));
+    ctx = flb_calloc(1, sizeof(struct flb_in_postgres));
     if (!ctx) {
         flb_errno();
         return -1;
@@ -557,6 +732,23 @@ static int cb_init(struct flb_input_instance *ins,
 
     ctx->coll_fd = -1;
     flb_input_set_context(ins, ctx);
+
+    ctx->mode = dbm_mode_parse(ctx->mode_conf);
+    if (ctx->mode < 0) {
+        flb_plg_error(ins, "mode: logs, metrics или both (задано %s)", ctx->mode_conf);
+        return -1;
+    }
+    ctx->cursor_type = dbm_cursor_type_parse(ctx->cursor_type_conf);
+    if (ctx->cursor_type < 0) {
+        flb_plg_error(ins, "cursor_type: string, number или raw (задано %s)",
+                      ctx->cursor_type_conf);
+        return -1;
+    }
+    if (dbm_names_init(&ctx->labels, ctx->label_fields) != 0 ||
+        dbm_names_init(&ctx->values, ctx->value_fields) != 0) {
+        flb_plg_error(ins, "не разобраны label_fields/value_fields");
+        return -1;
+    }
 
     /* пустой список — не ошибка: так выключается запрос к представлению,
      * которого нет ни на одном из серверов этой установки */
@@ -596,14 +788,22 @@ static int cb_init(struct flb_input_instance *ins,
     }
     ctx->coll_fd = ret;
 
-    flb_plg_info(ins, "опрос каждые %i с, серверов %i",
-                 ctx->interval_sec, mk_list_size(&ctx->targets));
+    flb_plg_info(ins, "опрос каждые %i с, серверов %i, режим %s",
+                 ctx->interval_sec, mk_list_size(&ctx->targets), ctx->mode_conf);
+    if (ctx->mode != DBM_MODE_LOGS) {
+        flb_plg_info(ins, "метрики: префикс %s, метки %s%s%s",
+                     ctx->metric_prefix,
+                     ctx->instance_field && flb_sds_len(ctx->instance_field) > 0 ?
+                         ctx->instance_field : "—",
+                     ctx->labels.count > 0 ? ", " : "",
+                     ctx->labels.count > 0 ? ctx->label_fields : "");
+    }
     return 0;
 }
 
 static void cb_pause(void *data, struct flb_config *config)
 {
-    struct flb_in_pgsql *ctx = data;
+    struct flb_in_postgres *ctx = data;
     (void) config;
     if (ctx->coll_fd >= 0) {
         flb_input_collector_pause(ctx->coll_fd, ctx->ins);
@@ -612,7 +812,7 @@ static void cb_pause(void *data, struct flb_config *config)
 
 static void cb_resume(void *data, struct flb_config *config)
 {
-    struct flb_in_pgsql *ctx = data;
+    struct flb_in_postgres *ctx = data;
     (void) config;
     if (ctx->coll_fd >= 0) {
         flb_input_collector_resume(ctx->coll_fd, ctx->ins);
@@ -621,7 +821,7 @@ static void cb_resume(void *data, struct flb_config *config)
 
 static int cb_exit(void *data, struct flb_config *config)
 {
-    struct flb_in_pgsql *ctx = data;
+    struct flb_in_postgres *ctx = data;
     struct mk_list *head;
     struct mk_list *tmp;
     struct pg_target *t;
@@ -649,6 +849,8 @@ static int cb_exit(void *data, struct flb_config *config)
     if (ctx->sql) {
         flb_sds_destroy(ctx->sql);
     }
+    dbm_names_destroy(&ctx->labels);
+    dbm_names_destroy(&ctx->values);
     flb_free(ctx);
     return 0;
 }
@@ -656,90 +858,125 @@ static int cb_exit(void *data, struct flb_config *config)
 static struct flb_config_map config_map[] = {
     {
      FLB_CONFIG_MAP_STR, "targets", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, targets_conf),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, targets_conf),
      "Серверы PostgreSQL: host[:port] через запятую"
     },
     {
      FLB_CONFIG_MAP_STR, "user", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, user),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, user),
      "Пользователь; при Kerberos имя берётся из билета и параметр не нужен"
     },
     {
      FLB_CONFIG_MAP_STR, "password", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, password),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, password),
      "Пароль (при Kerberos не нужен)"
     },
     {
      FLB_CONFIG_MAP_STR, "database", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, database),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, database),
      "База, к которой подключаться"
     },
     {
      FLB_CONFIG_MAP_STR, "conn_options", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, conn_options),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, conn_options),
      "Довесок к строке подключения libpq, например sslmode=require gssencmode=require"
     },
     {
      FLB_CONFIG_MAP_STR, "query", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, query),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, query),
      "Текст SQL-запроса"
     },
     {
      FLB_CONFIG_MAP_STR, "query_file", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, query_file),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, query_file),
      "Файл с SQL-запросом (важнее, чем query)"
     },
     {
      FLB_CONFIG_MAP_STR, "instance_field", "instance",
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, instance_field),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, instance_field),
      "Имя поля, куда плагин кладёт имя сервера; пустое — не добавлять"
     },
     {
      FLB_CONFIG_MAP_STR, "cursor_field", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, cursor_field),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, cursor_field),
      "Столбец результата, из которого берётся курсор для {CURSOR}"
     },
     {
      FLB_CONFIG_MAP_STR, "cursor_default", "now() - INTERVAL '30 seconds'",
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, cursor_default),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, cursor_default),
      "Чем подставить {CURSOR} на первом запросе"
     },
     {
      FLB_CONFIG_MAP_STR, "cursor_file", NULL,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, cursor_file),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, cursor_file),
      "Путь-основа для хранения курсора между перезапусками (на сервер свой файл)"
     },
     {
+     FLB_CONFIG_MAP_STR, "cursor_type", "string",
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, cursor_type_conf),
+     "Как подставлять курсор: string ('значение'), number или raw"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "time_field", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, time_field),
+     "Столбец со временем события; без него берётся время опроса"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "mode", "logs",
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, mode_conf),
+     "Что отдавать: logs (записи), metrics (метрики) или both"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "metric_prefix", "postgres",
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, metric_prefix),
+     "Общее начало имени метрик: <префикс>_<столбец>"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "metrics_tag", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, metrics_tag),
+     "Тег метрик; нужен в режиме both, чтобы отделить их от записей"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "label_fields", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, label_fields),
+     "Столбцы-метки через запятую; instance добавляется сам"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "value_fields", NULL,
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, value_fields),
+     "Столбцы-значения через запятую; пусто — все числовые, кроме меток"
+    },
+    {
      FLB_CONFIG_MAP_INT, "connect_timeout", "5",
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, connect_timeout),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, connect_timeout),
      "Таймаут подключения, секунды"
     },
     {
      FLB_CONFIG_MAP_INT, "statement_timeout", "5000",
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, statement_timeout),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, statement_timeout),
      "statement_timeout сеанса, миллисекунды"
     },
     {
      FLB_CONFIG_MAP_INT, "retry_pause_sec", "30",
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, retry_pause_sec),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, retry_pause_sec),
      "Пауза перед следующей попыткой после неудачного подключения, секунды"
     },
     {
      FLB_CONFIG_MAP_INT, "interval_sec", DEFAULT_INTERVAL_SEC,
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, interval_sec),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, interval_sec),
      "Период опроса, секунды"
     },
     {
      FLB_CONFIG_MAP_INT, "interval_nsec", "0",
-     0, FLB_TRUE, offsetof(struct flb_in_pgsql, interval_nsec),
+     0, FLB_TRUE, offsetof(struct flb_in_postgres, interval_nsec),
      "Период опроса, наносекунды"
     },
     {0}
 };
 
-struct flb_input_plugin in_pgsql_plugin = {
-    .name         = "pgsql",
-    .description  = "PostgreSQL SQL input (libpq)",
+struct flb_input_plugin in_postgres_plugin = {
+    .name         = "postgres",
+    .description  = "PostgreSQL SQL input (libpq): записи или метрики",
     .cb_init      = cb_init,
     .cb_pre_run   = NULL,
     .cb_collect   = cb_collect,

@@ -92,6 +92,8 @@ help:
 	@echo "  make dist       собрать -dist образ $(VERSION) (звенья цепочки — если нужны)"
 	@echo "  make build      собрать образ $(IMAGE)"
 	@echo "  make test       проверить образ: fluent-bit --version, список плагинов, smoke-пайплайн"
+	@echo "  make stand      поднять стенд postgres+clickhouse+fluent-bit и проверить свои плагины"
+	@echo "  make stand-down убрать стенд"
 	@echo ""
 	@echo "  Цепочка: $(VERSION_CHAIN)"
 	@echo "  Каждая версия собирается тулчейном dmp/gcc, cmake берётся из dmp/cmake, рантайм — чистый dmp/glibc."
@@ -99,7 +101,11 @@ help:
 	@echo "  out_pgsql (свой статический libpq), in_systemd (journald), avro-кодек,"
 	@echo "  in_unix_socket, in_event_test, out_retry."
 	@echo "  Свои плагины из plugins/ собираются рядом как .so и перечисляются в"
-	@echo "  /usr/local/etc/fluent-bit/plugins.conf (сейчас: in_clickhouse — SQL в ClickHouse по HTTP)."
+	@echo "  /usr/local/etc/fluent-bit/plugins.conf: postgres (libpq, Kerberos) и"
+	@echo "  clickhouse (SQL по HTTP) есть и как вход (записи либо метрики, Mode),"
+	@echo "  и как выход (произвольный SQL над пачкой); in_pg2ch — насос PG COPY ->"
+	@echo "  CH INSERT TabSeparated по расписанию."
+	@echo "  Запросы и примеры едут в образе: /usr/local/share/fluent-bit/{queries,examples}."
 	@echo "  Не собираются (нужен чужой тулчейн, недоступный на этой базе):"
 	@echo "    in_ebpf        — clang с целью bpf, bpftool и libbpf/libelf (в astra 2.12 их нет)"
 	@echo "    filter_throttle_size — не собирается с текущим API flb_hash_table (баг апстрима)"
@@ -250,6 +256,20 @@ test-%: build-%
 		fluent-bit --help 2>&1 | head -1; 		\
 		echo "== functional check =="; 			\
 		/test/fluentbitcheck.sh'
+
+
+# стенд для своих плагинов: настоящие postgres и clickhouse, проверка идёт
+# по метрикам в prometheus_exporter, а не по факту запуска
+STAND := $(TEST_DIR)/stand
+
+.PHONY: stand
+stand: build-$(VERSION)
+	FLB_IMAGE=$(IMAGE):$(VERSION) docker compose -f $(STAND)/docker-compose.yml up -d
+	$(STAND)/check.sh
+
+.PHONY: stand-down
+stand-down:
+	docker compose -f $(STAND)/docker-compose.yml down -v
 
 
 .PHONY: clean

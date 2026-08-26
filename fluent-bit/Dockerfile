@@ -151,6 +151,7 @@ COPY plugins/ /tmp/plugins/
 # Свои плагины из plugins/ — только как .so: встроенные апстрим собирает
 # статически. Флаги берутся у cmake из flags.make родного плагина: расхождение
 # флагов даёт не ошибку, а порчу памяти (загрузчик делает memcpy структуры).
+# Каталог на плагин; plugins/include — общие заголовки, .so из него не делается.
 # Собранное перечисляется в штатном plugins.conf.
 RUN set -eux;                                                           \
     cd /tmp;                                                            \
@@ -160,7 +161,8 @@ RUN set -eux;                                                           \
     mkdir -p ${FLB_PATH}/usr/local/lib/fluent-bit/plugins;              \
     for dir in plugins/*/; do                                           \
         name=$(basename $dir);                                          \
-        /usr/local/bin/gcc -fPIC -shared -O2                            \
+        ls $dir*.c >/dev/null 2>&1 || continue;                         \
+        /usr/local/bin/gcc -fPIC -shared -O2 -I plugins/include         \
             -o ${FLB_PATH}/usr/local/lib/fluent-bit/plugins/flb-$name.so \
             $dir/*.c $defs $incs;                                       \
         echo "плагин собран: flb-$name.so";                             \
@@ -173,6 +175,11 @@ RUN set -eux;                                                           \
     } > ${FLB_PATH}/usr/local/etc/fluent-bit/plugins.conf;              \
     cat ${FLB_PATH}/usr/local/etc/fluent-bit/plugins.conf;              \
     cd /; rm -rf /tmp/*
+
+# Запросы и примеры конфигураций едут в образе: плагин без запроса бесполезен,
+# а держать их в проекте потребителя — значит расходиться с версией плагина
+COPY queries/  ${FLB_PATH}/usr/local/share/fluent-bit/queries/
+COPY examples/ ${FLB_PATH}/usr/local/share/fluent-bit/examples/
 
 
 FROM ${DIST_IMAGE} AS distimg

@@ -1,0 +1,64 @@
+# Стенд для проверки своих плагинов: postgres + clickhouse + fluent-bit.
+# Ничего в самих СУБД не заводится — опрос идёт запросами снаружи.
+#
+#   docker compose -f test/stand/docker-compose.yml up -d
+#   test/stand/check.sh
+#   docker compose -f test/stand/docker-compose.yml down -v
+
+name: fluent-bit-stand
+
+services:
+  postgres:
+    image: ${PG_IMAGE:-dmp/postgres:17}
+    environment:
+      POSTGRES_PASSWORD: fluentbit
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # образ dmp/clickhouse — голый бинарник без обвязки: конфигурацию задаём явно,
+  # а проверять живость нечем, кроме самого клиента (wget/curl в образе нет)
+  clickhouse:
+    image: ${CH_IMAGE:-dmp/clickhouse:25.12.12.1-stable}
+    command: ["server", "--config-file=/usr/local/etc/clickhouse-server/config.xml"]
+    volumes:
+      # ключа командной строки для listen_host нет, зато config.d рядом с
+      # config.xml сервер подхватывает сам
+      - ./clickhouse-listen.xml:/usr/local/etc/clickhouse-server/config.d/listen.xml:ro
+    ulimits:
+      nofile: 262144
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clickhouse", "client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  fluent-bit:
+    image: ${FLB_IMAGE:-dmp/fluent-bit:5.0.9}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      PG_TARGETS: postgres:5432
+      PG_USER: postgres
+      PG_PASSWORD: fluentbit
+      PG_DATABASE: postgres
+      CH_TARGETS: clickhouse:8123
+      CH_USER: default
+      CH_PASSWORD: ""
+    volumes:
+      - ./fluent-bit.conf:/etc/fluent-bit/stand.conf:ro
+      - flb-state:/var/lib/fluent-bit
+    command: ["-c", "/etc/fluent-bit/stand.conf"]
+    ports:
+      - "127.0.0.1:2020:2020"
+      - "127.0.0.1:2021:2021"
+      - "127.0.0.1:2022:2022"
+
+volumes:
+  flb-state:
