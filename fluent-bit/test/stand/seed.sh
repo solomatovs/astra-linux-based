@@ -73,4 +73,25 @@ pg "UPDATE demo_events SET payload = payload || 'y' WHERE id % 7 = 0"
 pg "ANALYZE demo_events"
 echo "строк: $(pg "SELECT count(*) FROM demo_events")"
 
+# TLS у postgres: нужен пробе Type tls с Preamble postgres — без живого
+# рукопожатия нечем проверить разбор сертификата и дату истечения. Образ
+# минимальный, docker-entrypoint-initdb.d в нём нет, зато у параметра ssl
+# контекст sighup: включается перечитыванием конфигурации, без перезапуска
+echo "== tls у postgres =="
+"${DC[@]}" exec -T postgres sh -c '
+    cd "${PGDATA:-/var/lib/postgresql/data}"
+    if [ ! -s server.crt ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+            -subj "/CN=postgres" -keyout server.key -out server.crt >/dev/null 2>&1
+        chmod 600 server.key
+    fi'
+pg "ALTER SYSTEM SET ssl = on" >/dev/null
+pg "SELECT pg_reload_conf()" >/dev/null
+for _ in $(seq 1 15); do
+    [ "$(pg "SHOW ssl")" = on ] && break
+    sleep 1
+done
+echo "ssl: $(pg "SHOW ssl"), сертификат до $("${DC[@]}" exec -T postgres \
+    openssl x509 -in /var/lib/postgresql/data/server.crt -noout -enddate | sed 's/notAfter=//')"
+
 echo "== готово, метрики появятся в течение одного интервала опроса =="

@@ -83,6 +83,7 @@ struct flb_out_ring {
     uint64_t dropped;           /* вытеснено за всё время */
     uint64_t received;          /* принято за всё время */
     uint64_t served;            /* отдано за всё время */
+    int serving;                /* выдача уже идёт: второй запрос ждать не будет */
     pthread_mutex_t lock;
 
 #if RING_HTTP_NEW
@@ -172,6 +173,26 @@ static void ring_clear(struct flb_out_ring *ctx)
     }
     ctx->bytes = 0;
     ctx->records = 0;
+}
+
+/* Под замком. Снять n самых старых — ровно те, что ушли в ответ. Пришедшие
+ * за время отправки остаются в кольце. */
+static void ring_drop_first(struct flb_out_ring *ctx, uint64_t n)
+{
+    struct mk_list *head;
+    struct mk_list *tmp;
+    struct ring_item *item;
+
+    mk_list_foreach_safe(head, tmp, &ctx->items) {
+        if (n == 0) {
+            break;
+        }
+        item = mk_list_entry(head, struct ring_item, _head);
+        ctx->bytes -= flb_sds_len(item->json) + 1;
+        ctx->records--;
+        n--;
+        ring_item_destroy(item);
+    }
 }
 
 /* Под замком. Склейка всего кольца в один ответ. */
@@ -296,15 +317,16 @@ static int handler_new(struct flb_http_request *request,
              query_flag(request->query_string,
                         strlen(request->query_string), "clear"));
 
-    /* замок держится на всё: сборка ответа, отдача и очистка */
+    /* Замок берётся только на снимок и на снятие отданного, но НЕ на время
+     * отправки: иначе застрявший клиент заблокировал бы и приём данных.
+     * От двойной выдачи защищает флаг serving — пока идёт одна выдача,
+     * остальные запросы получают пусто, а не те же записи повторно. */
     pthread_mutex_lock(&ctx->lock);
-
-    if (ctx->records == 0) {
+    if (ctx->serving || ctx->records == 0) {
         pthread_mutex_unlock(&ctx->lock);
         return flb_hs_response_set_payload(response, 200,
                                            FLB_HS_CONTENT_TYPE_JSON, NULL, 0);
     }
-
     payload = ring_payload(ctx);
     if (!payload) {
         pthread_mutex_unlock(&ctx->lock);
@@ -312,22 +334,27 @@ static int handler_new(struct flb_http_request *request,
         return flb_http_response_commit(response);
     }
     sent = ctx->records;
+    ctx->serving = FLB_TRUE;
+    pthread_mutex_unlock(&ctx->lock);
 
     ret = flb_hs_response_set_payload(response, 200, FLB_HS_CONTENT_TYPE_JSON,
                                       payload, flb_sds_len(payload));
-    /* очищаем только если отдача удалась: не удалось — записи остаются и
-     * уедут следующим запросом */
+
+    pthread_mutex_lock(&ctx->lock);
+    ctx->serving = FLB_FALSE;
+    /* снимаем только если отдача удалась, и ровно отданное: пришедшее за это
+     * время остаётся в кольце */
     if (ret == 0) {
         ctx->served += sent;
         if (clear) {
-            ring_clear(ctx);
+            ring_drop_first(ctx, sent);
         }
     }
     else {
         flb_plg_warn(ctx->ins, "отдача не удалась, кольцо не очищено");
     }
-
     pthread_mutex_unlock(&ctx->lock);
+
     flb_sds_destroy(payload);
     return ret;
 }
@@ -392,16 +419,16 @@ static void handler_old(mk_request_t *request, void *data)
             query_flag(request->query_string.data,
                        request->query_string.len, "clear");
 
+    /* см. комментарий в обработчике 5.x: замок не держим на время отправки,
+     * от двойной выдачи защищает serving */
     pthread_mutex_lock(&ctx->lock);
-
-    if (ctx->records == 0) {
+    if (ctx->serving || ctx->records == 0) {
         pthread_mutex_unlock(&ctx->lock);
         mk_http_status(request, 200);
         flb_hs_add_content_type_to_req(request, FLB_HS_CONTENT_TYPE_JSON);
         mk_http_done(request);
         return;
     }
-
     payload = ring_payload(ctx);
     if (!payload) {
         pthread_mutex_unlock(&ctx->lock);
@@ -410,6 +437,8 @@ static void handler_old(mk_request_t *request, void *data)
         return;
     }
     sent = ctx->records;
+    ctx->serving = FLB_TRUE;
+    pthread_mutex_unlock(&ctx->lock);
 
     mk_http_status(request, 200);
     flb_hs_add_content_type_to_req(request, FLB_HS_CONTENT_TYPE_JSON);
@@ -422,17 +451,19 @@ static void handler_old(mk_request_t *request, void *data)
      * библиотечном режиме monkey он возвращает MK_CHANNEL_ERROR даже когда
      * клиент данные получил (проверено). Поэтому признаком неудачи считаем
      * только отрицательный код — большего этот слой сказать не может */
+    pthread_mutex_lock(&ctx->lock);
+    ctx->serving = FLB_FALSE;
     if (ret >= 0) {
         ctx->served += sent;
         if (clear) {
-            ring_clear(ctx);
+            ring_drop_first(ctx, sent);
         }
     }
     else {
         flb_plg_warn(ctx->ins, "отдача не удалась, кольцо не очищено");
     }
-
     pthread_mutex_unlock(&ctx->lock);
+
     flb_sds_destroy(payload);
 }
 

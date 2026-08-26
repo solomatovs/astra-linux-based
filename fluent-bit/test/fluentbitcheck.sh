@@ -201,6 +201,40 @@ for pair in "in_postgres -i postgres" "in_clickhouse -i clickhouse" "in_pg2ch -i
     fi
 done
 
+echo "== 2.1.6 пробы: четыре типа =="
+so="$PLUGIN_DIR/flb-in_probe.so"
+if [ -e "$so" ]; then
+    for t in tcp icmp tls http; do
+        case "$t" in
+            icmp) tg="localhost" ;;
+            http) tg="http://localhost:80/" ;;
+            *)    tg="localhost:80" ;;
+        esac
+        out=$(dry "$FLB" -e "$so" --dry-run -i probe -p type=$t -p targets="$tg" \
+            -p timeout_ms=1000 -p mode=metrics -o null)
+        if grep -q "successful" <<<"$out"; then
+            echo "OK  probe: тип $t принят"
+        else
+            echo "$out" | tail -3
+            echo "FAIL probe: тип $t не принят" >&2
+            exit 1
+        fi
+    done
+    # преамбулы TLS для postgres и AD
+    out=$(dry "$FLB" -e "$so" --dry-run -i probe -p type=tls -p targets=localhost:5432 \
+        -p preamble=postgres -o null)
+    out2=$(dry "$FLB" -e "$so" --dry-run -i probe -p type=tls -p targets=localhost:389 \
+        -p preamble=ldap-starttls -o null)
+    if grep -q "successful" <<<"$out" && grep -q "successful" <<<"$out2"; then
+        echo "OK  probe: преамбулы postgres и ldap-starttls приняты"
+    else
+        echo "FAIL probe: преамбулы не приняты" >&2
+        exit 1
+    fi
+else
+    echo "SKIP probe не собран"
+fi
+
 echo "== 2.2 библиотека запросов и примеры =="
 SHARE=/usr/local/share/fluent-bit
 for d in queries/pg queries/ch examples; do

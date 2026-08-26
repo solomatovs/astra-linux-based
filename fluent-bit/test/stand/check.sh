@@ -23,7 +23,7 @@ check() {  # $1=что ищем $2=пояснение
 
 fetch() {
     for _ in $(seq 1 "$WAIT"); do
-        body=$(curl -sf "$URL" 2>/dev/null) && [ -n "$body" ] && return 0
+        body=$(curl -sf -m 10 "$URL" 2>/dev/null) && [ -n "$body" ] && return 0
         sleep 1
     done
     return 1
@@ -149,7 +149,7 @@ else
 fi
 
 # кольцевой буфер: накопление, вытеснение старого, очистка при выдаче
-ring_stats() { curl -sf "http://127.0.0.1:2022/stats" 2>/dev/null; }
+ring_stats() { curl -sf -m 5 "http://127.0.0.1:2022/stats" 2>/dev/null; }
 for _ in $(seq 1 15); do
     [ -n "$(ring_stats)" ] && break
     sleep 2
@@ -169,8 +169,8 @@ else
     echo "WARN ring: вытеснения пока не было — кольцо не переполнилось" >&2
 fi
 
-n1=$(curl -sf http://127.0.0.1:2022/logs | wc -l)
-n2=$(curl -sf http://127.0.0.1:2022/logs/clear | wc -l)
+n1=$(curl -sf -m 10 http://127.0.0.1:2022/logs | wc -l)
+n2=$(curl -sf -m 10 http://127.0.0.1:2022/logs/clear | wc -l)
 after=$(sed -E 's/.*"records":([0-9]+).*/\1/' <<<"$(ring_stats)")
 if [ "$n1" -gt 0 ] && [ "$n2" -gt 0 ] && [ "${after:-1}" -lt "$n2" ]; then
     echo "OK   ring: GET отдал ($n1), GET /clear отдал ($n2) и очистил"
@@ -182,7 +182,7 @@ fi
 # одновременные запросы не должны отдать одно и то же дважды
 sleep 3
 rm -f /tmp/ring-par-*.txt
-for i in 1 2 3 4 5; do curl -sf http://127.0.0.1:2022/logs/clear > /tmp/ring-par-$i.txt & done
+for i in 1 2 3 4 5; do curl -sf -m 10 http://127.0.0.1:2022/logs/clear > /tmp/ring-par-$i.txt & done
 wait
 nonempty=$(grep -lc . /tmp/ring-par-*.txt 2>/dev/null | wc -l)
 if [ "$nonempty" -le 1 ]; then
@@ -192,6 +192,45 @@ else
     fails=$((fails + 1))
 fi
 rm -f /tmp/ring-par-*.txt
+
+# пробы: состояния портов, icmp и http
+check 'probe_success{'    'probe: probe_success есть (имена как у blackbox)'
+check 'probe_port_state{' 'probe: состояние порта отдельной метрикой'
+check 'type="icmp"'       'probe: icmp отработал'
+check 'type="http"'       'probe: http отработал'
+
+check 'probe_ssl_earliest_cert_expiry{' 'probe: срок сертификата unix-временем'
+check 'probe_ssl_cert_expiry_days{'     'probe: срок сертификата в днях'
+
+# дата истечения: метрика, дни и строка в записи должны сходиться между собой
+# и с самим сертификатом
+exp_unix=$(grep -m1 -oE 'probe_ssl_earliest_cert_expiry\{[^}]*\} [0-9]+' <<<"$body" | awk '{print $2}')
+# запись пробы уходит в stdout по Match log.*, кольцо ловит только sink.nginx
+# именно последнюю: первые пробы сделаны до того, как seed.sh включил ssl,
+# и у них cert_not_after законно пуст
+rec=$("${DC[@]}" logs fluent-bit 2>&1 | grep '"type":"tls"' | tail -1)
+rec_date=$(sed -n 's/.*"cert_not_after":"\([^"]*\)".*/\1/p' <<<"$rec")
+real=$("${DC[@]}" exec -T -u 0 postgres \
+    openssl x509 -in /var/lib/postgresql/data/server.crt -noout -enddate 2>/dev/null |
+    sed 's/notAfter=//')
+real_unix=$(date -u -d "$real" +%s 2>/dev/null || echo 0)
+metric_date=$(date -u -d "@${exp_unix:-0}" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo -)
+if [ -n "$rec_date" ] && [ "$rec_date" = "$metric_date" ] &&
+   [ -n "$real_unix" ] && [ "$real_unix" -eq "${exp_unix:-0}" ] 2>/dev/null; then
+    echo "OK   probe: дата истечения сходится везде ($rec_date)"
+else
+    echo "FAIL probe: дата истечения расходится: метрика=$metric_date запись=$rec_date сертификат=$real" >&2
+    fails=$((fails + 1))
+fi
+
+open_ports=$(grep -c 'probe_port_state{[^}]*} 1' <<<"$body")
+closed_ports=$(grep -c 'probe_port_state{[^}]*} 0' <<<"$body")
+if [ "$open_ports" -ge 2 ] && [ "$closed_ports" -ge 1 ]; then
+    echo "OK   probe: открытых портов $open_ports, закрытых $closed_ports"
+else
+    echo "FAIL probe: открытых $open_ports, закрытых $closed_ports (ждали >=2 и >=1)" >&2
+    fails=$((fails + 1))
+fi
 
 # журнал с курсором. Сравнивать количество нельзя: насос pg2ch продолжает
 # вставлять и рождать новые куски — событий законно прибывает. Перечитанный

@@ -468,6 +468,60 @@ ClickHouse, докуда долил в прошлый раз:
 {"date":1787731225.450684,"table":"pg_events","status":"error","rows":0,"bytes":0,"batches":0,"duration_ms":0.0,"cursor":"0","error":"copy failed to start"}
 ```
 
+## Пробы → метрики чёрного ящика
+
+Четвёртый вход не спрашивает СУБД, а стучится в сервис снаружи — как nmap, ping,
+`openssl s_client` и curl. Тип пробы задаётся параметром, целей может быть
+несколько:
+
+```ini
+[INPUT]
+    Name        probe
+    Tag         log.probe.tls
+    Type        tls
+    Targets     ${PG_TARGETS}
+    Preamble    postgres
+    Verify      off
+    Mode        both
+    Metrics_Tag metric.probe
+    Interval_Sec 30
+```
+
+В `Mode both` одна проба даёт и запись, и метрики. Запись — то, что человек
+читает в журнале:
+
+```json
+{"date":1787772117.44963,"instance":"postgres:5432","type":"tcp","success":1,"duration_seconds":0.000723669,"failure":"","port_state":"open"}
+{"date":1787772117.44979,"instance":"postgres:9999","type":"tcp","success":0,"duration_seconds":0.000146952,"failure":"порт закрыт","port_state":"closed"}
+{"date":1787772117.449631,"instance":"postgres","type":"icmp","success":1,"duration_seconds":0.000726809,"failure":""}
+{"date":1787772117.449958,"instance":"http://clickhouse:8123/ping","type":"http","success":1,"duration_seconds":0.001056893,"failure":"","status_code":200,"content_length":4}
+{"date":1787772117.452878,"instance":"postgres:5432","type":"tls","success":1,"duration_seconds":0.003986031,"failure":"","tls_version":"TLSv1.3","cert_subject":"/CN=postgres","cert_not_after":"2026-08-28T19:15:08Z","cert_expiry_days":1.99,"verify_result":18}
+```
+
+Метрики — то, что забирает Prometheus. Имена намеренно как у
+**blackbox_exporter**, поэтому готовые дашборды и алерты подходят без правки:
+
+```
+probe_success{instance="postgres:5432",type="tls"} = 1
+probe_duration_seconds{instance="postgres:5432",type="tls"} = 0.003986031
+probe_ssl_earliest_cert_expiry{instance="postgres:5432",type="tls"} = 1787944508
+probe_ssl_cert_expiry_days{instance="postgres:5432",type="tls"} = 1.9952662
+probe_ssl_verify_result{instance="postgres:5432",type="tls"} = 18
+probe_port_state{instance="postgres:9999",type="tcp"} = 0
+probe_icmp_duration_seconds{instance="postgres",type="icmp"} = 0.000726809
+probe_http_status_code{instance="http://clickhouse:8123/ping",type="http"} = 200
+probe_http_content_length{instance="http://clickhouse:8123/ping",type="http"} = 4
+```
+
+Про **дату истечения сертификата**: `probe_ssl_earliest_cert_expiry` — это она и
+есть, unix-временем (Grafana рисует такое поле датой, если задать типу
+`Time`). Тот же момент в днях — `probe_ssl_cert_expiry_days`, для порога в
+алерте, и читаемой строкой `cert_not_after` в записи. Значения согласованы:
+`1787944508` = `2026-08-28T19:15:08Z` = `1.99` дня.
+
+`probe_port_state` — единственное, чего у blackbox нет: **1** open, **0**
+closed, **2** filtered, как различает nmap.
+
 ---
 
 # Как выглядит поток на выходе
@@ -916,6 +970,38 @@ PostgreSQL на `WHERE sid > '9'` отвечает нулём строк. Леч
 | `Retry_Pause_Sec` | наш | `30` | пауза после неудачного подключения |
 | `Interval_Sec` | наш | `60` | период прогонов |
 | `Schedule` | наш | — | cron-выражение вместо интервала, например `0 2 * * *` — ночной перегон |
+
+---
+
+## Пробы `probe`
+
+Отдельный вход: не подключается к СУБД, а проверяет доступность сервиса снаружи.
+Один плагин на четыре типа проб, тип выбирается параметром `Type`.
+
+| параметр | чей | по умолчанию | что делает |
+|---|---|---|---|
+| `Type` | наш | `tcp` | `tcp` — состояние порта, `icmp` — эхо-запрос, `tls` — рукопожатие и разбор сертификата, `http` — запрос и проверка ответа |
+| `Targets` | наш | — | цели через запятую: `host:port` для `tcp`/`tls`, `host` для `icmp`, URL для `http` |
+| `Timeout_Ms` | наш | `5000` | сколько ждать. По нему же молчащий порт признаётся `filtered` |
+| `Mode` | наш | `metrics` | `metrics`, `logs` или `both` — как у входов к СУБД |
+| `Metrics_Tag` | наш | — | тег для метрик в режиме `both`; `Tag` при этом достаётся записям |
+| `Preamble` | наш | `none` | переговоры до TLS: `postgres` (8 байт SSLRequest) или `ldap-starttls` (операция расширения LDAP). Для LDAPS на 636 не нужна — там обычный TLS |
+| `Verify` | наш | `on` | считать ли непроверенную цепочку неудачей пробы. `off` проверку не отключает: `probe_ssl_verify_result` приезжает всегда |
+| `Ca_File` | наш | — | корневой сертификат для проверки цепочки |
+| `Servername` | наш | имя из цели | имя для SNI, если оно отличается от адреса |
+| `Method` | наш | `GET` | метод HTTP-пробы: `GET`, `POST`, `PUT`, `HEAD` |
+| `Body` | наш | — | тело запроса для `POST`/`PUT` |
+| `Headers` | наш | — | заголовки: `Ключ: значение; Ключ2: значение2` |
+| `Expect_Status` | наш | — | `200`, список `200,204` или класс `2xx`. Пусто — успехом считается любой 2xx/3xx |
+| `Expect_Body` | наш | — | подстрока, которая должна найтись в ответе; иначе `probe_failed_due_to_regex` = 1 |
+| `Interval_Sec` | наш | `30` | период проб |
+| `Schedule` | наш | — | cron-выражение вместо интервала |
+
+Вход всегда работает в своём потоке: пробы блокирующие, и недоступная цель на
+таймауте не должна задерживать остальной конвейер.
+
+Полный разбор — типы проб, преамбулы к PostgreSQL и Active Directory, семантика
+состояний порта — в `../plugins/README.md`, раздел «in_probe».
 
 ---
 
