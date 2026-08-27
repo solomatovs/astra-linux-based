@@ -235,6 +235,105 @@ else
     echo "SKIP probe не собран"
 fi
 
+echo "== 2.1.7 обратное соединение: пара stream =="
+so_out="$PLUGIN_DIR/flb-out_stream.so"
+so_in="$PLUGIN_DIR/flb-in_stream.so"
+if [ -e "$so_out" ] && [ -e "$so_in" ]; then
+    # периферия: выход, который слушает порт (задан Listen)
+    out=$(dry "$FLB" -e "$so_out" --dry-run -i dummy -o stream \
+        -p listen=127.0.0.1 -p port=19999 -p token=t -p require_ack=on \
+        -p ack_timeout_ms=3000 -p heartbeat_sec=10)
+    if grep -q "successful" <<<"$out"; then
+        echo "OK  out_stream: параметры периферии приняты"
+    else
+        echo "$out" | tail -3
+        echo "FAIL out_stream: параметры не приняты" >&2
+        exit 1
+    fi
+
+    # центр: вход, который подключается к списку периферий
+    out=$(dry "$FLB" -e "$so_in" --dry-run -i stream \
+        -p targets=127.0.0.1:19999,127.0.0.1:19998 -p token=t \
+        -p source_key=source -p poll_ms=200 -p retry_pause_sec=5 -o null)
+    if grep -q "successful" <<<"$out"; then
+        echo "OK  in_stream: параметры центра приняты"
+    else
+        echo "$out" | tail -3
+        echo "FAIL in_stream: параметры не приняты" >&2
+        exit 1
+    fi
+
+    # Зеркальная схема: направление СОЕДИНЕНИЯ выводится из конфигурации и
+    # с направлением данных не связано. Задан Host — выход звонит сам,
+    # задан Listen — вход ждёт
+    out=$(dry "$FLB" -e "$so_out" --dry-run -i dummy -o stream \
+        -p host=127.0.0.1 -p port=19999 -p node=edge-1 -p retry_pause_sec=5)
+    out2=$(dry "$FLB" -e "$so_in" --dry-run -i stream \
+        -p listen=127.0.0.1 -p port=19999 -p token=t -o null)
+    if grep -q "successful" <<<"$out" && grep -q "successful" <<<"$out2"; then
+        echo "OK  stream: обратная схема (выход звонит, вход ждёт) принята"
+    else
+        echo "$out" | tail -3; echo "$out2" | tail -3
+        echo "FAIL stream: обратная схема не принята" >&2
+        exit 1
+    fi
+
+    # выход одновременно и слушает, и звонит — бессмыслица: соединение одно
+    out=$("$FLB" -e "$so_out" -i dummy -o stream -p listen=127.0.0.1 \
+          -p host=127.0.0.1 -p port=19999 -f 1 2>&1 &
+          pid=$!; sleep 3; kill -TERM $pid 2>/dev/null || true;
+          wait $pid 2>/dev/null || true)
+    if grep -qi "заданы и Listen, и Host" <<<"$out"; then
+        echo "OK  out_stream: Listen вместе с Host отвергнуты"
+    else
+        echo "$out" | tail -3
+        echo "FAIL out_stream: Listen вместе с Host проехали" >&2
+        exit 1
+    fi
+
+    # а вход может и то, и другое сразу: часть узлов обзваниваем, часть ждём
+    out=$(dry "$FLB" -e "$so_in" --dry-run -i stream -p targets=127.0.0.1:19999 \
+        -p listen=127.0.0.1 -p port=19998 -o null)
+    if grep -q "successful" <<<"$out"; then
+        echo "OK  in_stream: Targets и Listen вместе приняты"
+    else
+        echo "$out" | tail -3
+        echo "FAIL in_stream: Targets вместе с Listen не приняты" >&2
+        exit 1
+    fi
+
+    # TLS: у слушающей стороны свои Cert_File/Key_File, у звонящей Verify.
+    # Имя «tls» занять нельзя — ядро перехватывает свойства на tls* раньше
+    # config_map, поэтому переключатель называется Secure
+    out=$(dry "$FLB" -e "$so_in" --dry-run -i stream -p targets=127.0.0.1:19999 \
+        -p secure=on -p verify=off -o null)
+    if grep -q "successful" <<<"$out"; then
+        echo "OK  in_stream: TLS-параметры приняты"
+    else
+        echo "FAIL in_stream: TLS-параметры не приняты" >&2
+        exit 1
+    fi
+
+    # Ни Targets, ни Listen — плагину нечего делать, он обязан не подняться.
+    # Проверять это через --dry-run нельзя: он разбирает конфигурацию, но
+    # cb_init не вызывает (проверено: пустая конфигурация проезжает молча)
+    out=$("$FLB" -e "$so_in" -i stream -o null -f 1 2>&1 &
+          pid=$!; sleep 3; kill -TERM $pid 2>/dev/null || true;
+          wait $pid 2>/dev/null || true)
+    # Судим по своему сообщению, а не по «input initialization failed»:
+    # 5.x на неподнявшемся входе останавливает движок, 3.2.10 продолжает
+    # работать без него — разница версий, не плагина
+    if grep -qi "укажите Targets" <<<"$out"; then
+        echo "OK  in_stream: без Targets и Listen не поднимается"
+    else
+        echo "$out" | tail -3
+        echo "FAIL in_stream: пустая конфигурация проехала молча" >&2
+        exit 1
+    fi
+else
+    echo "SKIP пара stream не собрана"
+fi
+
 echo "== 2.2 библиотека запросов и примеры =="
 SHARE=/usr/local/share/fluent-bit
 for d in queries/pg queries/ch examples; do

@@ -36,6 +36,23 @@ services:
       timeout: 5s
       retries: 30
 
+  # периферия «обратного соединения»: слушает 10000 и ждёт, когда за логами
+  # придёт центральный fluent-bit. Своих логов у неё нет — генерирует dummy
+  edge:
+    image: ${FLB_IMAGE:-dmp/fluent-bit:5.0.9}
+    volumes:
+      - ./edge.conf:/etc/fluent-bit/edge.conf:ro
+      - edge-state:/var/lib/fluent-bit
+    command: ["-c", "/etc/fluent-bit/edge.conf"]
+
+  # вторая периферия, ЗЕРКАЛЬНАЯ схема: звонит центру сама (Link connect),
+  # данные при этом текут туда же — от неё в центр
+  edge2:
+    image: ${FLB_IMAGE:-dmp/fluent-bit:5.0.9}
+    volumes:
+      - ./edge2.conf:/etc/fluent-bit/edge2.conf:ro
+    command: ["-c", "/etc/fluent-bit/edge2.conf"]
+
   fluent-bit:
     image: ${FLB_IMAGE:-dmp/fluent-bit:5.0.9}
     depends_on:
@@ -43,6 +60,8 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      edge:
+        condition: service_started
     environment:
       PG_TARGETS: postgres:5432
       PG_USER: postgres
@@ -62,3 +81,4 @@ services:
 
 volumes:
   flb-state:
+  edge-state:

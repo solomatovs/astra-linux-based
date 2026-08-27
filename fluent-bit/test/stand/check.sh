@@ -232,6 +232,56 @@ else
     fails=$((fails + 1))
 fi
 
+# обратное соединение: центр сам пришёл к периферии, записи приехали навстречу
+logs=$("${DC[@]}" logs fluent-bit 2>&1)
+if grep -q '"source":"edge:10000"' <<<"$logs"; then
+    echo "OK   stream: записи от периферии дошли с меткой источника"
+else
+    echo "FAIL stream: записей от периферии нет" >&2
+    fails=$((fails + 1))
+fi
+if "${DC[@]}" logs edge 2>&1 | grep -q "получатель.*подключился"; then
+    echo "OK   stream: периферия отдаёт подключившемуся центру"
+else
+    echo "FAIL stream: периферия не увидела подключения" >&2
+    fails=$((fails + 1))
+fi
+
+# зеркальная схема: периферия позвонила сама, метка взята из Node
+if grep -q '"source":"edge-2"' <<<"$logs"; then
+    echo "OK   stream: обратная схема (периферия звонит) работает, метка из Node"
+else
+    echo "FAIL stream: записей от звонящей периферии нет" >&2
+    fails=$((fails + 1))
+fi
+
+# буферизация при пропаже центра: роняем приёмник, периферия обязана копить на
+# диск (RETRY), а не терять — после возврата счёт должен вырасти
+before=$(grep -c '"source":"edge:10000"' <<<"$logs")
+"${DC[@]}" stop fluent-bit >/dev/null 2>&1
+sleep 6
+edge_disk=$("${DC[@]}" exec -T edge sh -c 'du -sb /var/lib/fluent-bit/edge-buf 2>/dev/null | cut -f1' | tr -d '\r')
+"${DC[@]}" start fluent-bit >/dev/null 2>&1
+sleep 15
+after=$(grep -c '"source":"edge:10000"' <<<"$("${DC[@]}" logs fluent-bit 2>&1)")
+if [ "${edge_disk:-0}" -gt 0 ] && [ "$after" -gt "$before" ]; then
+    echo "OK   stream: при пропаже центра периферия копила на диск ($edge_disk байт) и долила"
+else
+    echo "FAIL stream: буфер $edge_disk байт, записей было $before, стало $after" >&2
+    fails=$((fails + 1))
+fi
+
+# и главное: на потолке буфера вход обязан ВСТАТЬ, а не терять старое.
+# Без storage.pause_on_chunks_overlimit движок выбрасывает самые старые чанки
+edge_log=$("${DC[@]}" logs edge 2>&1)
+if grep -q "pausing" <<<"$edge_log" && ! grep -q "fail to drop" <<<"$edge_log"; then
+    echo "OK   stream: на потолке вход встал, чанки не выбрасывались"
+else
+    echo "FAIL stream: паузы входа нет или чанки выбрасывались" >&2
+    grep -iE "paus|fail to drop" <<<"$edge_log" | tail -3 >&2
+    fails=$((fails + 1))
+fi
+
 # журнал с курсором. Сравнивать количество нельзя: насос pg2ch продолжает
 # вставлять и рождать новые куски — событий законно прибывает. Перечитанный
 # журнал выдаёт себя иначе: одно и то же событие приезжает дважды, а благодаря
