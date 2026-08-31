@@ -1,0 +1,59 @@
+# omclickhouse: отправка журнала в ClickHouse по HTTP.
+# Скопировать в /etc/rsyslog.d/ (без .example), поправить server/pwd и
+# перезапустить rsyslog. Таблица заводится заранее — модуль её не создаёт:
+#
+#   CREATE DATABASE IF NOT EXISTS rsyslog;
+#   CREATE TABLE IF NOT EXISTS rsyslog.SystemEvents (
+#       severity  UInt8,
+#       facility  UInt8,
+#       timestamp DateTime,
+#       hostname  LowCardinality(String),
+#       tag       String,
+#       message   String
+#   ) ENGINE = MergeTree
+#   PARTITION BY toYYYYMM(timestamp)
+#   ORDER BY (hostname, timestamp);
+
+module(load="omclickhouse")
+
+# Шаблон по умолчанию (" StdClickHouseFmt") пишет ровно в таблицу выше, но
+# экранирует по STDSQL — только кавычку. ClickHouse понимает и обратный слеш,
+# поэтому сообщение с '\' на конце ломает INSERT, и пачка теряется молча.
+# Отсюда свой шаблон с option.sql="on": он экранирует и слеш тоже.
+template(name="chInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.SystemEvents (severity, facility, timestamp, hostname, tag, message) VALUES (%syslogseverity%, %syslogfacility%, '%timereported:::date-unixtimestamp%', '%hostname%', '%syslogtag%', '%msg%')")
+
+*.* action(
+    type="omclickhouse"
+    server="clickhouse.example.ru"
+    port="8123"
+    user="default"
+    pwd="secret"
+    template="chInsert"
+
+    # пачками: строки VALUES склеиваются, пока не наберётся maxbytes
+    bulkmode="on"
+    maxbytes="10m"
+
+    # HTTPS включён по умолчанию (usehttps=on, allowunsignedcerts=on) —
+    # для сервера без TLS его надо выключить явно.
+    # Корневые сертификаты берутся системные, tls.cacert — если свой CA
+    usehttps="off"
+    # tls.cacert="/etc/pki/tls/certs/clickhouse-ca.crt"
+    # tls.mycert="/etc/pki/tls/certs/rsyslog.crt"
+    # tls.myprivkey="/etc/pki/tls/private/rsyslog.key"
+
+    # таймауты в миллисекундах: проверка живости и сама вставка
+    healthchecktimeout="3500"
+    timeout="0"
+
+    # что не удалось вставить — в файл, иначе теряется молча
+    errorfile="/var/log/rsyslog-clickhouse-fail.log"
+
+    # очередь на диске: ClickHouse может быть недоступен, журнал ждать не должен
+    queue.type="linkedlist"
+    queue.filename="omclickhouse"
+    queue.maxdiskspace="1g"
+    queue.saveonshutdown="on"
+    action.resumeRetryCount="-1"
+)
