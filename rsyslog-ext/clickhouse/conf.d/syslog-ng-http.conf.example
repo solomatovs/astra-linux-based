@@ -1,0 +1,109 @@
+# syslog-ng -> ClickHouse через штатный модуль http (destination http()).
+#
+# Альтернатива rsyslog + omclickhouse (см. omclickhouse.conf.example) на тот
+# случай, когда журнал собирает syslog-ng. Собирать ничего не нужно: модули
+# http и json-plugin входят в syslog-ng-core из репозитория astra
+# (3.19.1, `syslog-ng --version` -> Available-Modules: ...,http,...,json-plugin,...).
+#
+# Скопировать в /etc/syslog-ng/conf.d/ (без .example), поправить url и пароль,
+# проверить `syslog-ng -s -f /etc/syslog-ng/syslog-ng.conf` и перезапустить.
+#
+# Таблица заводится заранее — та же, что у omclickhouse, так что оба варианта
+# пишут в одно место и взаимозаменяемы:
+#
+#   CREATE DATABASE IF NOT EXISTS rsyslog;
+#   CREATE TABLE IF NOT EXISTS rsyslog.SystemEvents (
+#       severity  UInt8,
+#       facility  UInt8,
+#       timestamp DateTime,
+#       hostname  LowCardinality(String),
+#       tag       String,
+#       message   String
+#   ) ENGINE = MergeTree
+#   PARTITION BY toYYYYMM(timestamp)
+#   ORDER BY (hostname, timestamp);
+#
+# Чем отличается от omclickhouse: тот собирает текстовый INSERT ... VALUES и
+# экранирует значения сам (и на STDSQL спотыкается об обратный слеш), а здесь
+# тело запроса — JSONEachRow, экранированием занимается format-json. Кавычки,
+# слеши и многострочные сообщения проблемой не являются.
+
+@version: 3.19
+@include "scl.conf"
+
+options {
+    # без этого syslog-ng подставит в $HOST имя своей машины вместо
+    # имени из принятой строки syslog
+    keep-hostname(yes);
+    chain-hostnames(no);
+    use-dns(no);
+};
+
+source s_local { system(); internal(); };
+
+# приём с других машин
+# source s_net { network(transport("tcp") port(514)); };
+
+destination d_clickhouse {
+    http(
+        # запрос ClickHouse едет в query string, пробелы — %20
+        url("http://clickhouse.example.ru:8123/?query=INSERT%20INTO%20rsyslog.SystemEvents%20FORMAT%20JSONEachRow")
+        method("POST")
+        user("default")
+        password("secret")
+        headers("Content-Type: application/x-ndjson")
+
+        # одно сообщение — один JSON-объект; при батчинге они склеиваются
+        # переводом строки (delimiter() по умолчанию "\n"), это и есть
+        # формат JSONEachRow.
+        # ВАЖНО: макрос внутри приведения типа пишется БЕЗ кавычек —
+        # int64("$LEVEL_NUM") молча даёт 0, а int64($LEVEL_NUM) даёт число.
+        # Строковые значения, наоборот, в кавычках.
+        # timestamp отдаётся числом unix-времени: ClickHouse принимает его
+        # в колонку DateTime как есть.
+        body("$(format-json
+                severity=int64($LEVEL_NUM)
+                facility=int64($FACILITY_NUM)
+                timestamp=int64($S_UNIXTIME)
+                hostname=\"$HOST\"
+                tag=\"$PROGRAM\"
+                message=\"$MSG\")")
+
+        # пачками: что наберётся первым, то и отправит
+        batch-lines(1000)
+        batch-bytes(4Mb)
+        batch-timeout(2000)
+        workers(4)
+
+        timeout(10)
+        retries(3)
+
+        # очередь на диске: ClickHouse может быть недоступен, журнал ждать
+        # не должен. При reliable(no) размер памяти задаётся в сообщениях
+        # (mem-buf-length), а не в байтах — mem-buf-size здесь игнорируется
+        persist-name("clickhouse")
+        log-fifo-size(100000)
+        disk-buffer(
+            mem-buf-length(20000)
+            disk-buf-size(1Gb)
+            reliable(no)
+            dir("/var/lib/syslog-ng")
+        )
+
+        # HTTPS: url("https://clickhouse.example.ru:8443/?query=...")
+        # peer-verify() принимает только yes/no, старое required-trusted
+        # эта версия не понимает
+        # tls(
+        #     peer-verify(yes)
+        #     ca-file("/etc/pki/tls/certs/clickhouse-ca.crt")
+        #     cert-file("/etc/pki/tls/certs/syslog-ng.crt")
+        #     key-file("/etc/pki/tls/private/syslog-ng.key")
+        # )
+    );
+};
+
+log {
+    source(s_local);
+#   source(s_net);
+    destination(d_clickhouse);
+};
