@@ -1,0 +1,106 @@
+# Сбор файлов из каталога в ClickHouse: imfile читает /var/log/myapp/*.log,
+# omclickhouse льёт строки в таблицу.
+#
+# Кладётся как /etc/rsyslog.d/30-clickhouse-files.conf (имя любое, но должно
+# оканчиваться на .conf — штатный /etc/rsyslog.conf подключает каталог строкой
+# $IncludeConfig /etc/rsyslog.d/*.conf, файлы читаются по алфавиту).
+# Проверить: rsyslogd -N1 && systemctl restart rsyslog
+#
+# Таблица заводится заранее — модуль её не создаёт:
+#
+#   CREATE DATABASE IF NOT EXISTS rsyslog;
+#   CREATE TABLE IF NOT EXISTS rsyslog.FileEvents (
+#       timestamp DateTime,
+#       hostname  LowCardinality(String),
+#       file      LowCardinality(String),
+#       tag       String,
+#       message   String
+#   ) ENGINE = MergeTree
+#   PARTITION BY toYYYYMM(timestamp)
+#   ORDER BY (file, timestamp);
+
+# Каталог для файлов позиции imfile. На RED OS его заводит пакет rsyslog, и
+# global() обычно уже стоит в /etc/rsyslog.conf — тогда эту строку не дублируем.
+# Если каталога нет, rsyslog скажет "can not be accessed - directive ignored"
+# и разложит файлы состояния в текущем каталоге (то есть в /).
+# global(workDirectory="/var/lib/rsyslog")
+
+# mode="inotify" обязателен для шаблонов в File: в режиме polling
+# подстановки не работают
+module(load="imfile" mode="inotify")
+module(load="omclickhouse")
+
+# option.sql="on", а не stdsql: ClickHouse понимает обратный слеш как
+# экранирующий символ, и строка, оканчивающаяся на '\', ломает INSERT —
+# пачка при этом теряется молча, без записи в журнале и в errorfile.
+# %$!metadata!filename% приезжает из addMetadata="on" у input.
+template(name="chFileInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.FileEvents (timestamp, hostname, file, tag, message) VALUES ('%timegenerated:::date-unixtimestamp%', '%hostname%', '%$!metadata!filename%', '%syslogtag%', '%msg%')")
+
+# Отдельный ruleset: строки из файлов идут только в ClickHouse и не попадают
+# в общий поток syslog (/var/log/messages и прочее).
+# Определяется ДО input, который на него ссылается.
+ruleset(name="rs_clickhouse_files") {
+    action(
+        type="omclickhouse"
+        server="clickhouse.example.ru"
+        port="8123"
+        user="default"
+        pwd="secret"
+        # по умолчанию модуль ходит по https (usehttps=on) — для сервера
+        # без TLS выключаем явно
+        usehttps="off"
+        template="chFileInsert"
+
+        bulkmode="on"
+        maxbytes="4m"
+        healthchecktimeout="3500"
+
+        # что не удалось вставить — в файл, иначе теряется молча
+        errorfile="/var/lib/rsyslog/clickhouse-fail.log"
+
+        # очередь на диске: ClickHouse может быть недоступен, сбор ждать не должен
+        action.resumeRetryCount="-1"
+        queue.type="linkedlist"
+        queue.filename="clickhouse-files"
+        queue.maxdiskspace="1g"
+        queue.saveonshutdown="on"
+    )
+}
+
+input(type="imfile"
+    # подстановки допустимы и в имени файла, и в именах каталогов:
+    # "/var/log/*/app.log" тоже работает
+    File="/var/log/myapp/*.log"
+    Tag="myapp"
+    ruleset="rs_clickhouse_files"
+
+    # без этого %$!metadata!filename% будет пустым
+    addMetadata="on"
+
+    # при первом знакомстве с файлом читать с конца, а не всю историю.
+    # На файлы, для которых уже есть состояние, не влияет
+    freshStartTail="on"
+
+    # файл обрезали (> file.log) — начать сначала, а не ждать прежнего смещения
+    reopenOnTruncate="on"
+
+    # перевод строки внутри сообщения не разорвёт SQL-строку
+    escapeLF="on"
+
+    # как часто сбрасывать позицию на диск, в сообщениях. При аварийной
+    # остановке заново прочитается всё после последней записи позиции:
+    # меньше значение — меньше дублей, больше обращений к диску.
+    # При штатной остановке позиция сохраняется в любом случае
+    PersistStateInterval="100"
+)
+
+# Многострочные записи (стек-трейсы): собирать в одно сообщение, началом
+# считать строку с датой в начале
+# input(type="imfile"
+#     File="/var/log/myapp/*.log"
+#     Tag="myapp"
+#     ruleset="rs_clickhouse_files"
+#     addMetadata="on" freshStartTail="on" escapeLF="on"
+#     startmsg.regex="^[0-9]{4}-[0-9]{2}-[0-9]{2}"
+#     readTimeout="5")

@@ -1,0 +1,111 @@
+# Сбор файлов из каталога в ClickHouse с разбором JSON: imfile читает
+# /var/log/myapp/*.log, mmjsonparse разбирает строку как JSON, omclickhouse
+# раскладывает известные поля по колонкам, а остаток кладёт в колонку типа JSON.
+# Строки, которые json'ом не оказались, не теряются — уходят в ту же таблицу
+# с level='raw'.
+#
+# Вариант без разбора JSON — imfile-clickhouse.conf.example.
+# Кладётся как /etc/rsyslog.d/30-clickhouse-json.conf.
+# Проверить: rsyslogd -N1 && systemctl restart rsyslog
+#
+# Таблица с самоочисткой через 2 месяца:
+#
+#   CREATE DATABASE IF NOT EXISTS rsyslog;
+#   CREATE TABLE IF NOT EXISTS rsyslog.AppLogs (
+#       timestamp DateTime CODEC(Delta, ZSTD(1)),
+#       hostname  LowCardinality(String),
+#       file      LowCardinality(String),
+#       level     LowCardinality(String),
+#       logger    LowCardinality(String),
+#       message   String CODEC(ZSTD(3)),
+#       fields    JSON
+#   ) ENGINE = MergeTree
+#   PARTITION BY toDate(timestamp)
+#   ORDER BY (file, level, timestamp)
+#   TTL timestamp + INTERVAL 2 MONTH DELETE
+#   SETTINGS ttl_only_drop_parts = 1;
+#
+# Про хранение:
+#   TTL ... DELETE      -- чистка идёт сама, фоном при слияниях; уже просроченное
+#                          отсекается и на вставке
+#   ttl_only_drop_parts -- удалять целыми кусками, не переписывая их построчно.
+#                          Кусок уходит, когда просрочены ВСЕ строки в нём,
+#                          поэтому granularity чистки = granularity партиции
+#   PARTITION BY toDate -- сутки: данные исчезают посуточно, за 2 месяца ~60
+#                          партиций. Крупнее (toMonday, toYYYYMM) — меньше кусков,
+#                          но и лишние данные живут дольше: при помесячной
+#                          партиции хвост доживает почти до 3 месяцев
+#   fields JSON         -- нативный тип ClickHouse (доступен с 25.x): к полям
+#                          можно обращаться как fields.order_id, fields.nested.a.
+#                          На версии постарше — String, и JSONExtract* в запросах
+#
+# Добавить TTL к уже существующей таблице:
+#   ALTER TABLE rsyslog.AppLogs MODIFY TTL timestamp + INTERVAL 2 MONTH DELETE;
+#   ALTER TABLE rsyslog.AppLogs MODIFY SETTING ttl_only_drop_parts = 1;
+
+# См. imfile-clickhouse.conf.example: каталог должен существовать, на RED OS
+# global() обычно уже стоит в /etc/rsyslog.conf
+# global(workDirectory="/var/lib/rsyslog")
+
+module(load="imfile" mode="inotify")
+module(load="mmjsonparse")
+module(load="omclickhouse")
+
+# Разобранный json лежит в $!, известные поля берём по именам, а весь объект
+# целиком — как %$!%.
+# timestamp: берём ts из самой записи. parseDateTimeBestEffortOrZero на мусоре
+# вернёт нулевую дату, а её TTL удалит сразу же — поэтому нулевой результат
+# подменяем временем чтения, и запись с кривым ts не пропадает.
+# option.sql="on", а не stdsql: ClickHouse понимает обратный слеш как
+# экранирующий символ, и строка, оканчивающаяся на '\', ломает INSERT —
+# пачка при этом теряется молча.
+template(name="chJsonInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.AppLogs (timestamp, hostname, file, level, logger, message, fields) VALUES (if(toUnixTimestamp(parseDateTimeBestEffortOrZero('%$!ts%')) = 0, toDateTime(%timegenerated:::date-unixtimestamp%), parseDateTimeBestEffortOrZero('%$!ts%')), '%hostname%', '%$.file%', '%$!level%', '%$!logger%', '%$!msg%', '%$!%')")
+
+# строка не json — кладём как есть, чтобы не терять
+template(name="chRawInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.AppLogs (timestamp, hostname, file, level, logger, message, fields) VALUES (toDateTime(%timegenerated:::date-unixtimestamp%), '%hostname%', '%$.file%', 'raw', '', '%msg%', '{}')")
+
+ruleset(name="rs_clickhouse_json") {
+    # cookie="" — у прикладных логов нет префикса @cee: , который
+    # mmjsonparse ждёт по умолчанию
+    action(type="mmjsonparse" cookie="")
+
+    # имя файла приезжает в $!metadata!filename, но в колонку fields служебный
+    # metadata попадать не должен: перекладываем в локальную переменную $. и
+    # вычищаем из $!
+    set $.file = $!metadata!filename;
+    unset $!metadata;
+
+    if $parsesuccess == "OK" then {
+        action(type="omclickhouse"
+            server="clickhouse.example.ru" port="8123"
+            user="default" pwd="secret"
+            usehttps="off" template="chJsonInsert"
+            bulkmode="on" maxbytes="4m" healthchecktimeout="3500"
+            errorfile="/var/lib/rsyslog/clickhouse-fail.log"
+            action.resumeRetryCount="-1"
+            queue.type="linkedlist" queue.filename="clickhouse-json"
+            queue.maxdiskspace="1g" queue.saveonshutdown="on")
+    } else {
+        action(type="omclickhouse"
+            server="clickhouse.example.ru" port="8123"
+            user="default" pwd="secret"
+            usehttps="off" template="chRawInsert"
+            bulkmode="on" maxbytes="4m" healthchecktimeout="3500"
+            errorfile="/var/lib/rsyslog/clickhouse-fail.log"
+            action.resumeRetryCount="-1"
+            queue.type="linkedlist" queue.filename="clickhouse-raw"
+            queue.maxdiskspace="1g" queue.saveonshutdown="on")
+    }
+}
+
+input(type="imfile"
+    File="/var/log/myapp/*.log"
+    Tag="myapp"
+    ruleset="rs_clickhouse_json"
+    addMetadata="on"
+    freshStartTail="on"
+    reopenOnTruncate="on"
+    escapeLF="on"
+    PersistStateInterval="100")
