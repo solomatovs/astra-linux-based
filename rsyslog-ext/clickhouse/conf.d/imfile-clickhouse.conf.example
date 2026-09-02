@@ -1,5 +1,6 @@
-# Сбор файлов из каталога в ClickHouse: imfile читает /var/log/myapp/*.log,
-# omclickhouse льёт строки в таблицу.
+# Сбор файлов в ClickHouse: imfile читает файлы из нескольких каталогов,
+# omclickhouse льёт строки в таблицу. Локация задаётся отдельным input,
+# их может быть сколько угодно (см. ниже).
 #
 # Кладётся как /etc/rsyslog.d/30-clickhouse-files.conf (имя любое, но должно
 # оканчиваться на .conf — штатный /etc/rsyslog.conf подключает каталог строкой
@@ -68,9 +69,26 @@ ruleset(name="rs_clickhouse_files") {
     )
 }
 
+# Локаций может быть сколько угодно — по одному input на каждую. Все они
+# ссылаются на общий ruleset, а различаются Tag: по нему в таблице видно,
+# откуда приехала строка (плюс есть колонка file с полным путём).
+#
+# Подстановки допустимы и в имени файла, и в именах каталогов, поэтому один
+# input закрывает несколько каталогов одного уровня вложенности.
+# Рекурсии нет: "**" не работает, глубину надо выписывать явно —
+# "/opt/app/logs/*/*.log" это ровно один уровень подкаталогов,
+# "/opt/app/logs/*/*/*.log" — два.
+# Каталог, появившийся уже после старта rsyslog, под существующую маску
+# подхватывается сам, перезапуск не нужен.
+#
+# Если маски пересекаются, строка не задваивается: файл достаётся первому
+# подошедшему input. Но и Tag тогда будет от него, а не от того, что ниже, —
+# лучше маски не пересекать.
+#
+# Набор параметров у каждого input свой, общих значений по умолчанию для них
+# нет — повторяем целиком.
+
 input(type="imfile"
-    # подстановки допустимы и в имени файла, и в именах каталогов:
-    # "/var/log/*/app.log" тоже работает
     File="/var/log/myapp/*.log"
     Tag="myapp"
     ruleset="rs_clickhouse_files"
@@ -92,8 +110,32 @@ input(type="imfile"
     # остановке заново прочитается всё после последней записи позиции:
     # меньше значение — меньше дублей, больше обращений к диску.
     # При штатной остановке позиция сохраняется в любом случае
-    PersistStateInterval="100"
-)
+    PersistStateInterval="100")
+
+input(type="imfile"
+    File="/var/log/nginx/*.log"
+    Tag="nginx"
+    ruleset="rs_clickhouse_files"
+    addMetadata="on" freshStartTail="on" reopenOnTruncate="on"
+    escapeLF="on" PersistStateInterval="100")
+
+# каталог на сервис: /opt/app/logs/billing/app.log, /opt/app/logs/auth/app.log ...
+input(type="imfile"
+    File="/opt/app/logs/*/*.log"
+    Tag="services"
+    ruleset="rs_clickhouse_files"
+    addMetadata="on" freshStartTail="on" reopenOnTruncate="on"
+    escapeLF="on" PersistStateInterval="100")
+
+# отдельный файл, без подстановок. Если такого файла на старте ещё нет,
+# rsyslog предупредит "static file monitor - this may indicate a
+# misconfiguration" — это не ошибка, файл подхватится, когда появится
+input(type="imfile"
+    File="/var/log/audit/audit.log"
+    Tag="audit"
+    ruleset="rs_clickhouse_files"
+    addMetadata="on" freshStartTail="on" reopenOnTruncate="on"
+    escapeLF="on" PersistStateInterval="100")
 
 # Многострочные записи (стек-трейсы): собирать в одно сообщение, началом
 # считать строку с датой в начале
