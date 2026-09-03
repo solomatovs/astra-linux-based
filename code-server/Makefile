@@ -10,19 +10,15 @@ CS_PATH			?= /opt/code-server
 
 VERSION_CHAIN		?= 4.116.0 4.117.0
 VERSION      		?= $(lastword $(VERSION_CHAIN))
-BASE_URL			?= https://codeload.github.com/coder/code-server/tar.gz/refs/tags
-VSCODE_URL			?= https://codeload.github.com/microsoft/vscode/tar.gz
-RIPGREP_URL			?= https://github.com/microsoft/ripgrep-prebuilt/releases/download
+# всё с github (тарболы, releases, git-зависимости) — через одну базу
+BASE_URL			?= https://github.com
 ELECTRON_URL		?= https://www.electronjs.org/headers
 MARKETPLACE_URL		?= https://marketplace.visualstudio.com/_apis/public/gallery/publishers
-GITDEPS_URL			?= https://github.com
-GITHUB_API_URL		?= https://api.github.com
 NPM_URL				?= https://registry.npmjs.org
-AGENT_BROWSER_URL	?= https://github.com/vercel-labs/agent-browser/releases/download
 NO_CACHE			?= 0
 
 NODE_IMAGE			?= dmp/nodejs:22.22.1-dist
-RUNTIME_IMAGE			?= dmp/glibc:2.28
+RUNTIME_IMAGE		?= dmp/glibc:2.28
 GCC_IMAGE			?= dmp/gcc:12.4.0-dist
 PYTHON_IMAGE		?= dmp/python:3.10-dist
 
@@ -118,12 +114,8 @@ debug:
 	$(info VERSION        = $(VERSION))
 	$(info FIRST_VERSION  = $(FIRST_VERSION))
 	$(info BASE_URL       = $(BASE_URL))
-	$(info VSCODE_URL     = $(VSCODE_URL))
-	$(info RIPGREP_URL    = $(RIPGREP_URL))
 	$(info ELECTRON_URL   = $(ELECTRON_URL))
 	$(info MARKETPLACE_URL = $(MARKETPLACE_URL))
-	$(info GITDEPS_URL    = $(GITDEPS_URL))
-	$(info GITHUB_API_URL = $(GITHUB_API_URL))
 	$(info NPM_URL        = $(NPM_URL))
 	$(info NODE_IMAGE     = $(NODE_IMAGE))
 	$(info RUNTIME_IMAGE  = $(RUNTIME_IMAGE))
@@ -164,10 +156,10 @@ sources-%:
 	set -- $(DEPS_$*)
 	mkdir -p $(ARTIFACTS)/src
 	for spec in $$v														\
-		"$(BASE_URL)/v$$current|code-server-$$current-src.tar.gz"		\
-		"$(VSCODE_URL)/$$4|vscode-$$4.tar.gz"							\
-		"$(RIPGREP_URL)/$$5/ripgrep-$$5-$$6.tar.gz|"					\
-		"$(ELECTRON_URL)/v$$7/node-v$$7-headers.tar.gz|electron-v$$7-headers.tar.gz" \
+		"$(BASE_URL)/coder/code-server/archive/refs/tags/v$$current.tar.gz|code-server-$$current-src.tar.gz"	\
+		"$(BASE_URL)/microsoft/vscode/archive/$$4.tar.gz|vscode-$$4.tar.gz"								\
+		"$(BASE_URL)/microsoft/ripgrep-prebuilt/releases/download/$$5/ripgrep-$$5-$$6.tar.gz|"			\
+		"$(ELECTRON_URL)/v$$7/node-v$$7-headers.tar.gz|electron-v$$7-headers.tar.gz"					\
 	; do url=$${spec%%|*}; name=$${spec#*|}; name=$${name:-$${url##*/}}
 		[ -f "$(ARTIFACTS)/src/$$name" ] || curl -fvL -o "$(ARTIFACTS)/src/$$name" "$$url"
 	done
@@ -176,7 +168,7 @@ sources-%:
 		| python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"]["node_modules/agent-browser"]["version"])')"
 	[ -f "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" ] \
 		|| curl -fvL -o "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" \
-			"$(AGENT_BROWSER_URL)/v$$ab_version/agent-browser-linux-x64"
+			"$(BASE_URL)/vercel-labs/agent-browser/releases/download/v$$ab_version/agent-browser-linux-x64"
 	mkdir -p "$(ARTIFACTS)/src/builtin-$$current"
 	tar -xzOf "$(ARTIFACTS)/src/vscode-$$4.tar.gz" "vscode-$$4/product.json" \
 		| python3 -c 'import json,sys; [print(e["name"], e["version"]) for e in (json.load(sys.stdin).get("builtInExtensions") or [])]' \
@@ -196,7 +188,7 @@ sources-%:
 			out="$(ARTIFACTS)/src/gitdeps-$$current/$$owner-$$repo.tar.gz"
 			[ -f "$$out" ] && continue
 			m=$$(mktemp -d)
-			git clone --quiet --mirror "$(GITDEPS_URL)/$$owner/$$repo.git" "$$m/$$owner/$$repo.git"
+			git clone --quiet --mirror "$(BASE_URL)/$$owner/$$repo.git" "$$m/$$owner/$$repo.git"
 			tar -czf "$$out" -C "$$m" "$$owner"
 			rm -rf "$$m"
 		done
@@ -211,10 +203,13 @@ deps-%:
 	@current=$(*)
 	set -e
 	mkdir -p $(ARTIFACTS)/src
-	sha=$$(curl -fsSL "$(GITHUB_API_URL)/repos/coder/code-server/contents/lib/vscode?ref=v$$current" \
-		| python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')
+	# sha сабмодуля lib/vscode: клон без блобов и checkout, только дерево тега
+	repo=$$(mktemp -d)
+	git clone --quiet --depth 1 --filter=blob:none --no-checkout -b "v$$current" "$(BASE_URL)/coder/code-server.git" "$$repo"
+	sha=$$(git -C "$$repo" ls-tree HEAD lib/vscode | awk '{print $$3}')
+	rm -rf "$$repo"
 	src='$(ARTIFACTS)/src/vscode-'"$$sha"'.tar.gz'
-	[ -f "$$src" ] || curl -fsL -o "$$src" "$(VSCODE_URL)/$$sha"
+	[ -f "$$src" ] || curl -fsL -o "$$src" "$(BASE_URL)/microsoft/vscode/archive/$$sha.tar.gz"
 	nvmrc=$$(tar -xzOf "$$src" vscode-$$sha/.nvmrc)
 	electron=$$(tar -xzOf "$$src" vscode-$$sha/.npmrc | sed -n 's/^target="\(.*\)"$$/\1/p')
 	ntarget=$$(tar -xzOf "$$src" vscode-$$sha/remote/.npmrc | sed -n 's/^target="\(.*\)"$$/\1/p')
