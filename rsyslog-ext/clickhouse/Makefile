@@ -1,5 +1,5 @@
 BASE_DIR      	?= $(abspath .)
-ARTIFACTS     	?= $(abspath $(BASE_DIR)/../../ci-artifacts/rsyslog-ext/clickhouse)
+ARTIFACTS     	?= $(abspath $(BASE_DIR)/../../../ci-artifacts/rsyslog-ext/clickhouse)
 BUILD_CONTEXT 	?= $(BASE_DIR)
 # рабочая копия $(ARTIFACTS) внутри контекста сборки (хардлинки, см. artifacts-link)
 LINKED_ARTIFACTS ?= $(BUILD_CONTEXT)/artifacts

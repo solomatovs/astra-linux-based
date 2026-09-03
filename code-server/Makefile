@@ -155,25 +155,29 @@ sources-%:
 	set -e
 	set -- $(DEPS_$*)
 	mkdir -p $(ARTIFACTS)/src
+	echo "  артефакты: $(ARTIFACTS)/src (чего нет — качаю)"
 	for spec in $$v														\
 		"$(BASE_URL)/coder/code-server/archive/refs/tags/v$$current.tar.gz|code-server-$$current-src.tar.gz"	\
 		"$(BASE_URL)/microsoft/vscode/archive/$$4.tar.gz|vscode-$$4.tar.gz"								\
 		"$(BASE_URL)/microsoft/ripgrep-prebuilt/releases/download/$$5/ripgrep-$$5-$$6.tar.gz|"			\
 		"$(ELECTRON_URL)/v$$7/node-v$$7-headers.tar.gz|electron-v$$7-headers.tar.gz"					\
 	; do url=$${spec%%|*}; name=$${spec#*|}; name=$${name:-$${url##*/}}
-		[ -f "$(ARTIFACTS)/src/$$name" ] || curl -fvL -o "$(ARTIFACTS)/src/$$name" "$$url"
+		[ -f "$(ARTIFACTS)/src/$$name" ] || { echo "  > нет $$name, качаю $$url"; curl -fvL -o "$(ARTIFACTS)/src/$$name" "$$url"; }
 	done
 	mkdir -p "$(ARTIFACTS)/src/agent-browser-$$current"
 	ab_version="$$(tar -xzOf "$(ARTIFACTS)/src/vscode-$$4.tar.gz" "vscode-$$4/package-lock.json" \
 		| python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"]["node_modules/agent-browser"]["version"])')"
-	[ -f "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" ] \
-		|| curl -fvL -o "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" \
+	[ -f "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" ] || {
+		echo "  > нет agent-browser-$$current/agent-browser-linux-x64, качаю v$$ab_version"
+		curl -fvL -o "$(ARTIFACTS)/src/agent-browser-$$current/agent-browser-linux-x64" \
 			"$(BASE_URL)/vercel-labs/agent-browser/releases/download/v$$ab_version/agent-browser-linux-x64"
+	}
 	mkdir -p "$(ARTIFACTS)/src/builtin-$$current"
 	tar -xzOf "$(ARTIFACTS)/src/vscode-$$4.tar.gz" "vscode-$$4/product.json" \
 		| python3 -c 'import json,sys; [print(e["name"], e["version"]) for e in (json.load(sys.stdin).get("builtInExtensions") or [])]' \
 		| while read -r name version; do
 			[ -f "$(ARTIFACTS)/src/builtin-$$current/$$name-$$version.vsix" ] && continue
+			echo "  > нет builtin-$$current/$$name-$$version.vsix, качаю из marketplace"
 			curl -fvL --compressed -o "$(ARTIFACTS)/src/builtin-$$current/$$name-$$version.vsix" \
 				"$(MARKETPLACE_URL)/$${name%%.*}/vsextensions/$${name#*.}/$$version/vspackage"
 		done
