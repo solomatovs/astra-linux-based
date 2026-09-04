@@ -28,6 +28,35 @@
 
 # mode="inotify" обязателен для шаблонов в File: в режиме polling
 # подстановки не работают
+# Что лежит в файлах и что оказывается в таблице (снято с работающей связки).
+#
+# /var/log/myapp/app.log:
+#   2026-09-02 10:30:00 ERROR [pool-1-thread-3] payments — таймаут шлюза, order=4711
+# /var/log/nginx/access.log:
+#   10.0.0.7 - - [02/Sep/2026:10:30:05 +0300] "GET /v1/orders HTTP/1.1" 500 217 "-" "curl/7.68.0"
+# /opt/app/logs/billing/app.log:
+#   2026-09-02T10:30:07 billing: списание 1200.50 RUB
+#
+# В rsyslog.FileEvents — по строке на каждую строку файла:
+#
+#   timestamp = 2026-09-04 05:44:08
+#               ВРЕМЯ ЧТЕНИЯ ФАЙЛА, а не время из строки (10:30:00). Строка
+#               сюда попадает как есть, её никто не разбирает. Если нужно
+#               время из самой записи — это уже разбор, см.
+#               imfile-json-clickhouse.conf.example
+#   hostname  = "log01"        имя машины, где работает rsyslog
+#   file      = "/var/log/nginx/access.log"    полный путь, из addMetadata
+#   tag       = "nginx"        Tag того input, который подобрал файл;
+#                              двоеточия тут нет, в отличие от обычного syslog
+#   message   = "10.0.0.7 - - [02/Sep/2026:10:30:05 +0300] \"GET /v1/orders HTTP/1.1\" 500 217 \"-\" \"curl/7.68.0\""
+#                              строка целиком, как в файле, без ведущего пробела
+#
+# Соответствие строк и тегов для примера выше:
+#   /var/log/myapp/app.log        -> tag "myapp"
+#   /var/log/nginx/access.log     -> tag "nginx"
+#   /opt/app/logs/billing/app.log -> tag "services"   (маска */*.log)
+#   /var/log/audit/audit.log      -> tag "audit"
+
 module(load="imfile" mode="inotify")
 module(load="omclickhouse")
 

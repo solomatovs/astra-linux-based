@@ -14,6 +14,31 @@
 #   PARTITION BY toYYYYMM(timestamp)
 #   ORDER BY (hostname, timestamp);
 
+# Что приходит и что оказывается в таблице (снято с работающей связки).
+#
+# Строка syslog на входе:
+#   <86>Sep  2 10:30:00 web01 sshd[2145]: Accepted publickey for admin from 10.0.0.7 port 51234 ssh2
+#
+# Строка в rsyslog.SystemEvents (значения показаны в кавычках, чтобы был виден
+# ведущий пробел в message):
+#   severity  = 6                       <86> = 10*8 + 6, то есть authpriv.info
+#   facility  = 10
+#   timestamp = 2026-09-02 10:30:00     время ИЗ строки syslog
+#   hostname  = "web01"                 тоже из строки
+#   tag       = "sshd[2145]:"           %syslogtag% — вместе с pid и двоеточием
+#   message   = " Accepted publickey for admin from 10.0.0.7 port 51234 ssh2"
+#                ^ %msg% всегда начинается с пробела после двоеточия тега.
+#                  Если он мешает, в шаблоне пишется %msg:2:$%
+#
+# Ещё одна, <27> = 3*8 + 3, то есть daemon.err:
+#   <27>Sep  2 10:30:05 web01 nginx: 10.0.0.7 - - [02/Sep/2026:10:30:05 +0300] "GET /v1/orders HTTP/1.1" 500 217
+#
+#   severity = 3, facility = 3, hostname = "web01", tag = "nginx:",
+#   message  = " 10.0.0.7 - - [02/Sep/2026:10:30:05 +0300] \"GET /v1/orders HTTP/1.1\" 500 217"
+#
+# То есть сюда попадает то же, что и в /var/log/messages: разбором занимается
+# сам rsyslog, действие только раскладывает разобранное по колонкам.
+
 module(load="omclickhouse")
 
 # Шаблон по умолчанию (" StdClickHouseFmt") пишет ровно в таблицу выше, но

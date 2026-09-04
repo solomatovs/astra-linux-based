@@ -47,6 +47,42 @@
 # global() обычно уже стоит в /etc/rsyslog.conf
 # global(workDirectory="/var/lib/rsyslog")
 
+# Что лежит в файле и что оказывается в таблице (снято с работающей связки).
+#
+# /var/log/myapp/app.log:
+#   {"ts":"2026-09-02T10:30:00Z","level":"error","logger":"payments","msg":"таймаут шлюза","order_id":4711,"retry":true,"upstream":{"host":"gw1","ms":3021}}
+#   {"ts":"2026-09-02 10:30:05","level":"info","logger":"api","msg":"запрос принят","path":"/v1/orders","dur_ms":12.5}
+#   {"level":"warn","logger":"cache","msg":"промах кэша"}
+#   2026-09-02 10:30:09 ERROR обычная строка, не json
+#
+# В rsyslog.AppLogs — четыре строки:
+#
+#   timestamp           level  logger    message          fields
+#   2026-09-02 10:30:00 error  payments  таймаут шлюза    весь объект, включая
+#     ^ ts из записи (ISO с Z разобран)                   order_id, retry, upstream
+#   2026-09-02 10:30:05 info   api       запрос принят    dur_ms, path, ...
+#     ^ ts из записи (обычный формат тоже понимается)
+#   2026-09-04 05:44:42 warn   cache     промах кэша      level, logger, msg
+#     ^ ts в записи нет -> время чтения файла
+#   2026-09-04 05:44:42 raw    (пусто)   2026-09-02 10:30:09 ERROR обычная...
+#     ^ не json -> ветка chRawInsert, строка целиком в message, fields = {}
+#
+# hostname во всех — имя машины с rsyslog, file — полный путь к файлу.
+# level/logger/message берутся из полей level/logger/msg; если в вашем логе
+# они называются иначе (severity/component/text), правьте имена в шаблоне.
+#
+# fields — нативный тип JSON, обращение к вложенному через точку:
+#
+#   SELECT level, fields.order_id, fields.upstream.ms, fields.path
+#   FROM rsyslog.AppLogs ORDER BY level;
+#
+#   ┌─level─┬─order_id─┬─upstream_ms─┬─path───────┐
+#   │ error │ 4711     │ 3021        │ NULL       │
+#   │ info  │ NULL     │ NULL        │ /v1/orders │
+#   │ raw   │ NULL     │ NULL        │ NULL       │
+#   │ warn  │ NULL     │ NULL        │ NULL       │
+#   └───────┴──────────┴─────────────┴────────────┘
+
 module(load="imfile" mode="inotify")
 module(load="mmjsonparse")
 module(load="omclickhouse")
