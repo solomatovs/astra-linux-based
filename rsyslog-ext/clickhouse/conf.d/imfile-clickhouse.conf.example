@@ -69,7 +69,8 @@ template(name="chFileInsert" type="string" option.sql="on"
 
 # Отдельный ruleset: строки из файлов идут только в ClickHouse и не попадают
 # в общий поток syslog (/var/log/messages и прочее).
-# Определяется ДО input, который на него ссылается.
+# Порядок ruleset и input свободен: ссылка разрешается в конце разбора.
+# А вот template должен стоять до действия, которое его берёт.
 ruleset(name="rs_clickhouse_files") {
     action(
         type="omclickhouse"

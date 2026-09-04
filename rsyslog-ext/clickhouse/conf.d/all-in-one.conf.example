@@ -1,0 +1,229 @@
+# Все три сценария в одном файле: обычный syslog, файлы как есть и файлы с
+# разбором JSON. Кладётся как /etc/rsyslog.d/30-clickhouse.conf.
+#
+# Дробить на файлы незачем: /etc/rsyslog.conf подключает /etc/rsyslog.d/*.conf
+# и всё склеивается в одну конфигурацию — разницы между «один файл» и «пять»
+# для rsyslog нет. Но при склейке вылезают четыре правила (все проверены):
+#
+#   1. Один и тот же модуль нельзя загрузить дважды: второй module(load="...")
+#      даёт "already in this config, cannot be added". Поэтому все module()
+#      собраны в одном месте, по одному разу.
+#   2. template должен быть объявлен ДО действия, которое на него ссылается,
+#      иначе "Could not find template - action disabled" и конфигурация не
+#      проходит. Поэтому все шаблоны идут до правил.
+#   3. А вот ruleset может стоять и после input, который его вызывает —
+#      ссылки разрешаются в конце разбора. Порядок тут свободный.
+#   4. queue.filename должен быть уникален на каждое действие с дисковой
+#      очередью: два одинаковых дают "already used. This is not possible".
+#
+# Ничего лишнего этот файл не включает: приём syslog (imuxsock, imjournal,
+# imtcp) остаётся за штатным /etc/rsyslog.conf.
+# Проверить: rsyslogd -N1 && systemctl restart rsyslog
+#
+# ---------------------------------------------------------------------------
+# Таблицы. Заводятся заранее, модуль их не создаёт.
+#
+#   CREATE DATABASE IF NOT EXISTS rsyslog;
+#
+#   -- 1. обычный syslog
+#   CREATE TABLE IF NOT EXISTS rsyslog.SystemEvents (
+#       severity  UInt8,
+#       facility  UInt8,
+#       timestamp DateTime,
+#       hostname  LowCardinality(String),
+#       tag       String,
+#       message   String
+#   ) ENGINE = MergeTree
+#   PARTITION BY toDate(timestamp)
+#   ORDER BY (hostname, timestamp)
+#   TTL timestamp + INTERVAL 2 MONTH DELETE
+#   SETTINGS ttl_only_drop_parts = 1;
+#
+#   -- 2. файлы как есть
+#   CREATE TABLE IF NOT EXISTS rsyslog.FileEvents (
+#       timestamp DateTime,
+#       hostname  LowCardinality(String),
+#       file      LowCardinality(String),
+#       tag       String,
+#       message   String
+#   ) ENGINE = MergeTree
+#   PARTITION BY toDate(timestamp)
+#   ORDER BY (file, timestamp)
+#   TTL timestamp + INTERVAL 2 MONTH DELETE
+#   SETTINGS ttl_only_drop_parts = 1;
+#
+#   -- 3. файлы с разбором JSON
+#   CREATE TABLE IF NOT EXISTS rsyslog.AppLogs (
+#       timestamp DateTime CODEC(Delta, ZSTD(1)),
+#       hostname  LowCardinality(String),
+#       file      LowCardinality(String),
+#       level     LowCardinality(String),
+#       logger    LowCardinality(String),
+#       message   String CODEC(ZSTD(3)),
+#       fields    JSON
+#   ) ENGINE = MergeTree
+#   PARTITION BY toDate(timestamp)
+#   ORDER BY (file, level, timestamp)
+#   TTL timestamp + INTERVAL 2 MONTH DELETE
+#   SETTINGS ttl_only_drop_parts = 1;
+#
+# Про TTL и партиции — см. imfile-json-clickhouse.conf.example.
+# Что именно попадает в каждую таблицу, с разобранными примерами строк —
+# см. omclickhouse / imfile-clickhouse / imfile-json-clickhouse .conf.example.
+# ---------------------------------------------------------------------------
+
+# Каталог для файлов позиции imfile. На RED OS его заводит пакет rsyslog и
+# global() обычно уже стоит в /etc/rsyslog.conf — тогда строку не дублируем
+# (второй global не ошибка, но путаницы добавляет).
+# global(workDirectory="/var/lib/rsyslog")
+
+
+##############################################################################
+# Модули — каждый ровно один раз
+##############################################################################
+
+# mode="inotify" обязателен для подстановок в File
+module(load="imfile" mode="inotify")
+module(load="mmjsonparse")
+module(load="omclickhouse")
+
+
+##############################################################################
+# Шаблоны — все до правил, иначе действие не найдёт свой шаблон
+##############################################################################
+
+# option.sql="on", а не stdsql: ClickHouse понимает обратный слеш как
+# экранирующий символ, и строка, оканчивающаяся на '\', ломает INSERT —
+# пачка при этом теряется молча, без записи в журнале и в errorfile
+
+# 1. обычный syslog
+template(name="chSyslogInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.SystemEvents (severity, facility, timestamp, hostname, tag, message) VALUES (%syslogseverity%, %syslogfacility%, '%timereported:::date-unixtimestamp%', '%hostname%', '%syslogtag%', '%msg%')")
+
+# 2. строка файла как есть
+template(name="chFileInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.FileEvents (timestamp, hostname, file, tag, message) VALUES ('%timegenerated:::date-unixtimestamp%', '%hostname%', '%$.file%', '%syslogtag%', '%msg%')")
+
+# 3. разобранный json. parseDateTimeBestEffortOrZero на кривом ts вернёт
+# нулевую дату, а её TTL удалит сразу же — поэтому ноль подменяем временем чтения
+template(name="chJsonInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.AppLogs (timestamp, hostname, file, level, logger, message, fields) VALUES (if(toUnixTimestamp(parseDateTimeBestEffortOrZero('%$!ts%')) = 0, toDateTime(%timegenerated:::date-unixtimestamp%), parseDateTimeBestEffortOrZero('%$!ts%')), '%hostname%', '%$.file%', '%$!level%', '%$!logger%', '%$!msg%', '%$!%')")
+
+# 3b. строка, которая json'ом не оказалась — кладём как есть, чтобы не терять
+template(name="chRawInsert" type="string" option.sql="on"
+    string="INSERT INTO rsyslog.AppLogs (timestamp, hostname, file, level, logger, message, fields) VALUES (toDateTime(%timegenerated:::date-unixtimestamp%), '%hostname%', '%$.file%', 'raw', '', '%msg%', '{}')")
+
+
+##############################################################################
+# 1. Обычный syslog -> rsyslog.SystemEvents
+##############################################################################
+
+# Идёт в общий поток, поэтому пишется действием прямо здесь, без ruleset.
+# Строки при этом продолжают попадать и в /var/log/messages — правила
+# штатного конфига никуда не деваются
+*.* action(
+    type="omclickhouse"
+    server="clickhouse.example.ru"
+    port="8123"
+    user="default"
+    pwd="secret"
+    # по умолчанию модуль ходит по https (usehttps=on) — для сервера
+    # без TLS выключаем явно
+    usehttps="off"
+    template="chSyslogInsert"
+
+    bulkmode="on"
+    maxbytes="4m"
+    healthchecktimeout="3500"
+    errorfile="/var/lib/rsyslog/clickhouse-syslog-fail.log"
+
+    action.resumeRetryCount="-1"
+    queue.type="linkedlist"
+    queue.filename="clickhouse-syslog"
+    queue.maxdiskspace="1g"
+    queue.saveonshutdown="on"
+)
+
+
+##############################################################################
+# 2. Файлы как есть -> rsyslog.FileEvents
+##############################################################################
+
+ruleset(name="rs_ch_files") {
+    # имя файла из addMetadata кладём в локальную переменную: так один и тот же
+    # шаблон годится и здесь, и в json-ветке, где $!metadata приходится вычищать
+    set $.file = $!metadata!filename;
+
+    action(
+        type="omclickhouse"
+        server="clickhouse.example.ru" port="8123"
+        user="default" pwd="secret"
+        usehttps="off" template="chFileInsert"
+        bulkmode="on" maxbytes="4m" healthchecktimeout="3500"
+        errorfile="/var/lib/rsyslog/clickhouse-files-fail.log"
+        action.resumeRetryCount="-1"
+        queue.type="linkedlist" queue.filename="clickhouse-files"
+        queue.maxdiskspace="1g" queue.saveonshutdown="on"
+    )
+}
+
+# Локаций может быть сколько угодно — по одному input на каждую, все на общий
+# ruleset, различаются Tag. Подстановки работают и в именах каталогов;
+# рекурсии нет, "**" не поддерживается — глубина выписывается явно
+input(type="imfile" File="/var/log/myapp/*.log"  Tag="myapp" ruleset="rs_ch_files"
+    addMetadata="on" freshStartTail="on" reopenOnTruncate="on"
+    escapeLF="on" PersistStateInterval="100")
+
+input(type="imfile" File="/var/log/nginx/*.log"  Tag="nginx" ruleset="rs_ch_files"
+    addMetadata="on" freshStartTail="on" reopenOnTruncate="on"
+    escapeLF="on" PersistStateInterval="100")
+
+input(type="imfile" File="/opt/app/logs/*/*.log" Tag="services" ruleset="rs_ch_files"
+    addMetadata="on" freshStartTail="on" reopenOnTruncate="on"
+    escapeLF="on" PersistStateInterval="100")
+
+
+##############################################################################
+# 3. Файлы со строками-json -> rsyslog.AppLogs
+##############################################################################
+
+ruleset(name="rs_ch_json") {
+    # cookie="" — у прикладных логов нет префикса @cee: , который
+    # mmjsonparse ждёт по умолчанию
+    action(type="mmjsonparse" cookie="")
+
+    # имя файла приезжает в $!metadata!filename, но в колонку fields служебный
+    # metadata попадать не должен: перекладываем в $. и вычищаем из $!
+    set $.file = $!metadata!filename;
+    unset $!metadata;
+
+    if $parsesuccess == "OK" then {
+        action(
+            type="omclickhouse"
+            server="clickhouse.example.ru" port="8123"
+            user="default" pwd="secret"
+            usehttps="off" template="chJsonInsert"
+            bulkmode="on" maxbytes="4m" healthchecktimeout="3500"
+            errorfile="/var/lib/rsyslog/clickhouse-json-fail.log"
+            action.resumeRetryCount="-1"
+            queue.type="linkedlist" queue.filename="clickhouse-json"
+            queue.maxdiskspace="1g" queue.saveonshutdown="on"
+        )
+    } else {
+        action(
+            type="omclickhouse"
+            server="clickhouse.example.ru" port="8123"
+            user="default" pwd="secret"
+            usehttps="off" template="chRawInsert"
+            bulkmode="on" maxbytes="4m" healthchecktimeout="3500"
+            errorfile="/var/lib/rsyslog/clickhouse-json-fail.log"
+            action.resumeRetryCount="-1"
+            queue.type="linkedlist" queue.filename="clickhouse-json-raw"
+            queue.maxdiskspace="1g" queue.saveonshutdown="on"
+        )
+    }
+}
+
+input(type="imfile" File="/var/log/structured/*.log" Tag="structured" ruleset="rs_ch_json"
+    addMetadata="on" freshStartTail="on" reopenOnTruncate="on"
+    escapeLF="on" PersistStateInterval="100")
